@@ -1,0 +1,15 @@
+{
+  "base": "SanSeth-Play-v0.1.0-LIVE-RETRY-AND-ANDROID-LAUNCH-FIX-SOURCE.zip",
+  "version": "v0.1.0+1",
+  "unchanged_original_files": 163,
+  "modified": [
+    "lib/app/home_screen.dart"
+  ],
+  "added": [
+    "docs/KEYBOARD_FOCUS_FIX_REPORT.md",
+    "test/keyboard_focus_test.dart"
+  ],
+  "deleted": [],
+  "flutter_analyze": "Not run (SDK unavailable)",
+  "flutter_test": "Not run (SDK unavailable)"
+}

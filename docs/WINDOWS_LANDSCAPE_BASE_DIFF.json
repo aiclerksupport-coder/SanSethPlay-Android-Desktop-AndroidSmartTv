@@ -1,0 +1,17 @@
+{
+  "base": "SanSeth-Play-v0.1.0-POWERSHELL-LAUNCH-PARSER-FIX-SOURCE.zip",
+  "base_count": 186,
+  "unchanged": 182,
+  "modified": [
+    "BUILD_WINDOWS_INSTALLER.ps1",
+    "lib/app/home_screen.dart",
+    "lib/player/player_view.dart",
+    "scripts/RUN_PIPELINE.ps1"
+  ],
+  "added": [
+    "docs/WINDOWS_LANDSCAPE_CONTROLS_FIX_REPORT.md",
+    "scripts/VERIFY_WINDOWS_TOOLCHAIN.ps1"
+  ],
+  "deleted": [],
+  "tests": "source-only; Flutter SDK absent"
+}

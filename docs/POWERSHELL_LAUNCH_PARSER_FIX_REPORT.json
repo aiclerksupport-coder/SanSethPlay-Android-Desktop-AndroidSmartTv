@@ -1,0 +1,10 @@
+{
+  "base_archive": "SanSeth-Play-v0.1.0-MINI-PLAYER-PREMIUM-UI-ABOUT-LEGAL-SOURCE.zip",
+  "version": "v0.1.0+1 (unchanged)",
+  "changed_files": [
+    "SanSeth-Play-v0.1.0/VERIFY_ANDROID_LAUNCH.ps1"
+  ],
+  "reason": "Windows PowerShell 5.1 treats `$exitCode:` in a double-quoted string as invalid variable scope; use `${exitCode}:`.",
+  "runtime_verification": "PowerShell executable not available in this environment; static check only",
+  "other_files_unchanged": 184
+}

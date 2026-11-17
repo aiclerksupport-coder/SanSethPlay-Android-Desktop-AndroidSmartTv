@@ -1,0 +1,15 @@
+BASE: SanSeth Play v0.1.0 OFFLINE EPG TV BATCH
+Unchanged originals: 35/41
+Modified originals:
+pubspec.yaml
+README.md
+docs/RELEASE_GATES.md
+lib/app/home_screen.dart
+lib/player/player_view.dart
+lib/core/channel_cache.dart
+Added:
+test/large_cache_codec_test.dart
+test/tv_guide_widget_test.dart
+lib/app/tv_guide_dialog.dart
+Removed:
+

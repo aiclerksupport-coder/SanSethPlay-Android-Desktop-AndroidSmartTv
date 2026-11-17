@@ -1,0 +1,22 @@
+{
+  "source_base": "SanSeth-Play-v0.1.0-RELIABILITY-BUILD-SMOKE-PATCH-SOURCE.zip",
+  "original_file_count": 132,
+  "unchanged_count": 131,
+  "modified_existing": [
+    "README.md"
+  ],
+  "missing": [],
+  "added": [
+    ".gitattributes",
+    ".github/workflows/flutter-checks.yml",
+    ".gitignore",
+    "BUILD_TEST_INSTALL_GITHUB.ps1",
+    "GITHUB_REPOSITORY.txt",
+    "PUSH_AFTER_VERIFIED.ps1",
+    "VERIFY_WINDOWS_INSTALLER.ps1",
+    "docs/GITHUB_BUILD_PUSH_HINGLISH.md"
+  ],
+  "github_remote": "https://github.com/aiclerksupport-coder/SanSethPlay-Android-Desktop-AndroidSmartTv.git",
+  "flutter_sdk_available_here": false,
+  "physical_tests_completed_here": false
+}

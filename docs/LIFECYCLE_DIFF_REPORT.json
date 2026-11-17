@@ -1,0 +1,25 @@
+{
+  "base": "TV-REMOTE-PLAYER-SAFETY-BATCH",
+  "version": "0.1.0+1",
+  "unchanged_count": 55,
+  "modified": [
+    "README.md",
+    "lib/player/player_view.dart",
+    "tool/prepare_platforms.ps1"
+  ],
+  "added": [
+    "docs/LIFECYCLE_BATCH.md",
+    "lib/player/latest_channel_request.dart",
+    "test/latest_channel_request_test.dart"
+  ],
+  "removed": [],
+  "approved_brand_sha256": {
+    "assets/branding/splash_landscape_1920x1080.png": "5bc7a17d4d8574f952c5719f6496007e3455cd3ee9dea02918b45a43e4427089",
+    "assets/branding/app_icon_master.png": "cfa1383e9e17555c451f795071c91d1ecaf8ac9d4eef368f58ebe670d1027747",
+    "assets/branding/full_logo_original.png": "4f4bf81186a8a117a2e9bfa5abc768c11a0caf678770adf45020e6803537d5c8",
+    "assets/branding/android_tv_banner_320x180.png": "0289b9ac824ee7a0c48beeb1c92883d2057876f0894a82f8f7e2347522c1b908",
+    "assets/branding/splash_portrait_1080x1920.png": "b472ba1321df6fd98139e083a149bc7d80ddfebd7a11e3a1dbbaace3aee43047"
+  },
+  "flutter_sdk_available": false,
+  "runtime_tests_passed": false
+}

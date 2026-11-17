@@ -1,0 +1,15 @@
+BASE FILES: 35
+UNCHANGED: 32
+CHANGED:
+README.md
+lib/app/home_screen.dart
+pubspec.yaml
+ADDED:
+docs/IMPLEMENTATION_AUDIT.md
+lib/core/channel_cache.dart
+lib/core/epg_repository.dart
+test/channel_cache_test.dart
+test/epg_repository_test.dart
+REMOVED: none
+
+Flutter SDK missing: NOT COMPILED OR RUNTIME VERIFIED.

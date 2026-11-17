@@ -1,0 +1,19 @@
+{
+  "base_archive": "SanSeth-Play-v0.1.0-VOD-RESUME-MULTIVIEW-WINDOWS-INSTALLER-SOURCE.zip",
+  "total_original_files": 88,
+  "unchanged_files": 84,
+  "modified_files": [
+    "README.md",
+    "lib/app/home_screen.dart",
+    "lib/core/playlist_store.dart",
+    "lib/core/saved_playlist.dart"
+  ],
+  "new_files": [
+    "docs/CATEGORY_PLAYLIST_BATCH.md",
+    "lib/core/channel_categories.dart",
+    "test/playlist_category_dedupe_test.dart"
+  ],
+  "removed_files": [],
+  "flutter_sdk_available": false,
+  "verification": "source comparison and zip integrity only; flutter compile/tests/hardware not run"
+}

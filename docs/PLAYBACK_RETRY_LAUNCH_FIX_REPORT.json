@@ -1,0 +1,18 @@
+{
+  "version": "v0.1.0+1",
+  "base": "SanSeth-Play-v0.1.0-ANDROID-LINT-NETWORK-SECURITY-FIX-SOURCE.zip",
+  "original_file_count": 162,
+  "unchanged_original_files": 160,
+  "changed_existing_files": [
+    "VERIFY_ANDROID_LAUNCH.ps1",
+    "lib/player/player_view.dart"
+  ],
+  "deleted_original_files": [],
+  "new_files_before_report": [],
+  "build_status": "Not rerun in this environment; user previously confirmed release APK build and install",
+  "functional_status": "Targeted source repair; physical playback unverified",
+  "sources_checked": [
+    "Android adb am start documentation",
+    "media_kit PlayerStream stream contracts"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "base": "SanSeth-Play-v0.1.0-XTREAM-HARDENING-THREE-PLATFORMS-SOURCE.zip",
+  "version": "0.1.0+1",
+  "base_file_count": 83,
+  "unchanged_count": 78,
+  "modified": [
+    "README.md",
+    "lib/app/home_screen.dart",
+    "lib/core/channel.dart",
+    "lib/core/xtream_client.dart",
+    "lib/player/player_view.dart"
+  ],
+  "added": [
+    "BUILD_WINDOWS_INSTALLER.ps1",
+    "docs/PRODUCTION_PENDING_TRUTH.md",
+    "lib/core/vod_resume_store.dart",
+    "test/vod_resume_store_test.dart"
+  ],
+  "deleted": [],
+  "flutter_sdk_available": false,
+  "device_tests_passed": false,
+  "zip_integrity_verified": false
+}

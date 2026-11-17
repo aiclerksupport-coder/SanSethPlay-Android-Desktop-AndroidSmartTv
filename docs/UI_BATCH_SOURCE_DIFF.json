@@ -1,0 +1,17 @@
+{
+  "base_zip": "SanSeth-Play-v0.1.0-KEYBOARD-AUTOPOP-FIX-SOURCE.zip",
+  "same_version": "0.1.0+1",
+  "base_files": 167,
+  "unchanged": 164,
+  "changed": [
+    "lib/app/home_screen.dart",
+    "lib/app/sanseth_app.dart",
+    "lib/player/player_view.dart"
+  ],
+  "added": [
+    "docs/UI_UX_AND_LIVE_ASPECT_BATCH_HINGLISH.md",
+    "test/home_navigation_ui_test.dart"
+  ],
+  "deleted": [],
+  "dart_sdk_installed": false
+}

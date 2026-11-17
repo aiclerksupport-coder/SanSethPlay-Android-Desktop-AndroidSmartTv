@@ -1,0 +1,15 @@
+{
+  "baseline": "SanSeth-Play-v0.1.0-37-ANALYZER-BRACES-FIX-SOURCE.zip",
+  "version": "v0.1.0+1",
+  "changed": [
+    "SanSeth-Play-v0.1.0/test/hls_timeshift_network_test.dart",
+    "SanSeth-Play-v0.1.0/test/responsive_sizes_test.dart",
+    "SanSeth-Play-v0.1.0/test/widget_smoke_test.dart"
+  ],
+  "deleted": [],
+  "added_before_report": [],
+  "unchanged": 156,
+  "flutter_analyze_ran": false,
+  "flutter_test_ran": false,
+  "note": "Only test harness behavior corrected; test pass must be verified with Flutter SDK."
+}

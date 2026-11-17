@@ -1,0 +1,12 @@
+Baseline: SanSeth-Play-v0.1.0-ADVANCED-PLAYER-BATCH
+Byte-identical original files: 43 / 45
+Modified:
+lib/app/home_screen.dart
+lib/app/tv_guide_dialog.dart
+New:
+docs/NEXT_BATCH_DIFF.md
+lib/core/epg_schedule.dart
+test/epg_schedule_test.dart
+Removed:
+
+Flutter SDK absent: no compile/test/runtime claim.

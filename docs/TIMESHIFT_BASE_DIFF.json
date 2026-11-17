@@ -1,0 +1,21 @@
+{
+  "baseline": "SanSeth-Play-v0.1.0-CAST-RECORDING-RECOVERY-INTEGRATION-SOURCE.zip",
+  "original_file_count": 122,
+  "unchanged_original_files": 120,
+  "modified_original_files": [
+    "SanSeth-Play-v0.1.0/lib/player/player_view.dart",
+    "SanSeth-Play-v0.1.0/tool/prepare_platforms.ps1"
+  ],
+  "added_files": [
+    "SanSeth-Play-v0.1.0/docs/TIMESHIFT_BASE_DIFF.json",
+    "SanSeth-Play-v0.1.0/docs/TIMESHIFT_DELIVERY_AND_REMAINING_GATES.md",
+    "SanSeth-Play-v0.1.0/lib/core/hls_timeshift.dart",
+    "SanSeth-Play-v0.1.0/test/hls_timeshift_network_test.dart",
+    "SanSeth-Play-v0.1.0/test/hls_timeshift_test.dart"
+  ],
+  "removed_files": [],
+  "branding_unchanged": true,
+  "flutter_analyze": "NOT RUN \u2014 Flutter/Dart SDK unavailable",
+  "flutter_tests": "NOT RUN \u2014 Flutter/Dart SDK unavailable",
+  "hardware_validation": "NOT RUN \u2014 devices unavailable"
+}

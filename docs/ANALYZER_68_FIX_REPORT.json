@@ -1,0 +1,19 @@
+{
+  "source_base": "SanSeth-Play-v0.1.0-LIVE-VERBOSE-FAILURE-LOGGING-FIX-SOURCE.zip",
+  "app_version": "v0.1.0+1 unchanged",
+  "fixes": [
+    "nonfinal _LocalSegment constructor no longer const",
+    "FileMode.readWrite replaced with FileMode.append for in-place truncation (retain original bytes)",
+    "default Flutter-generated MyApp test replaced with SanSethApp smoke test",
+    "unused imports removed, existing remote-selection helper retained with explicit ignore",
+    "dart fix --apply automatically repairs remaining AST-supported lint issues before formatting/analyze with verbose failure log",
+    "two redundant non-null assertions removed from TS and HLS recorders"
+  ],
+  "limits": "Flutter SDK unavailable in assistant runtime: 68 issues not verified zero until user runs analyzer; no build or install claimed.",
+  "diagnostics_breakdown": {
+    "errors": 3,
+    "warnings": 4,
+    "infos": 61,
+    "total": 68
+  }
+}

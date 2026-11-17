@@ -1,0 +1,18 @@
+{
+  "base": "SanSeth-Play-v0.1.0-MEDIASESSION-CATCHUP-COMPLETION-SOURCE.zip",
+  "unchanged": 96,
+  "modified": [
+    "lib/app/sanseth_app.dart",
+    "lib/player/player_view.dart"
+  ],
+  "added": [
+    "docs/RECORDING_SPLASH_BATCH_REPORT.md",
+    "lib/app/brand_launch_screen.dart",
+    "lib/core/direct_ts_recorder.dart",
+    "test/brand_launch_smoke_test.dart",
+    "test/direct_ts_recorder_test.dart"
+  ],
+  "removed": [],
+  "branding_byte_identical": true,
+  "flutter_builds_executed": false
+}

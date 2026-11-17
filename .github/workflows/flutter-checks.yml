@@ -1,0 +1,28 @@
+name: SanSeth Play Flutter checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows-checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Android/Windows runners
+        shell: pwsh
+        run: .\tool\prepare_platforms.ps1
+      - name: Dependencies
+        run: flutter pub get
+      - name: Dart format check
+        run: dart format --output=none --set-exit-if-changed lib test
+      - name: Static analysis
+        run: flutter analyze --no-pub
+      - name: Flutter tests
+        run: flutter test --reporter expanded -j 1

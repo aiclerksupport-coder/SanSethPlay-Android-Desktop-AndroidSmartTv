@@ -1,0 +1,234 @@
+package __PACKAGE__
+
+import android.app.PictureInPictureParams
+import android.content.pm.PackageManager
+import android.media.MediaMetadata
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.os.StatFs
+import android.os.Build
+import io.flutter.embedding.android.FlutterFragmentActivity
+import androidx.mediarouter.app.MediaRouteButton
+import android.widget.FrameLayout
+import android.view.Gravity
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import com.google.android.gms.cast.MediaInfo
+import com.google.android.gms.cast.MediaMetadata as CastMetadata
+import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.CastButtonFactory
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import com.google.android.gms.cast.MediaLoadRequestData
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity : FlutterFragmentActivity() {
+    private var mediaSession: MediaSession? = null
+    private var mediaChannel: MethodChannel? = null
+    private var pipChannel: MethodChannel? = null
+    private var storageChannel: MethodChannel? = null
+    private var castChannel: MethodChannel? = null
+    private var castButton: MediaRouteButton? = null
+    private var immersiveChannel: MethodChannel? = null
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
+        immersiveChannel = MethodChannel(messenger, "sanseth_play/android_immersive").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setImmersive" -> {
+                        try {
+                            val enabled = call.arguments as? Boolean ?: false
+                            setPlayerImmersive(enabled)
+                            result.success(true)
+                        } catch (_: Exception) { result.success(false) }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        castChannel = MethodChannel(messenger, "sanseth_play/android_cast").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "available" -> result.success(try { CastContext.getSharedInstance(this); true } catch (_: Exception) { false })
+                    "showPicker" -> {
+                        try {
+                            if (castButton == null) {
+                                val button = MediaRouteButton(this)
+                                CastButtonFactory.setUpMediaRouteButton(this, button)
+                                // Must be attached to the Activity to open SDK route picker.
+                                button.alpha = 0.01f
+                                addContentView(button, FrameLayout.LayoutParams(
+                                    1, 1, Gravity.BOTTOM or Gravity.END))
+                                castButton = button
+                            }
+                            result.success(castButton?.performClick() == true)
+                        } catch (_: Exception) { result.success(false) }
+                    }
+                    "connected" -> result.success(try {
+                        CastContext.getSharedInstance(this).sessionManager.currentCastSession?.isConnected == true
+                    } catch (_: Exception) { false })
+                    "load" -> {
+                        try {
+                            val url = call.argument<String>("url") ?: ""
+                            val title = call.argument<String>("title") ?: "SanSeth Play"
+                            val uri = android.net.Uri.parse(url)
+                            if (uri.scheme != "https" || uri.host.isNullOrBlank() ||
+                                !uri.userInfo.isNullOrBlank()) {
+                                result.success(false)
+                            } else {
+                                val client: RemoteMediaClient? = CastContext.getSharedInstance(this)
+                                    .sessionManager.currentCastSession?.remoteMediaClient
+                                if (client == null) result.success(false)
+                                else {
+                                    val mime = when {
+                                        uri.path?.endsWith(".m3u8", true) == true -> "application/x-mpegURL"
+                                        uri.path?.endsWith(".mp4", true) == true -> "video/mp4"
+                                        uri.path?.endsWith(".ts", true) == true -> "video/mp2t"
+                                        else -> null
+                                    }
+                                    if (mime == null) result.success(false)
+                                    else {
+                                        val info = MediaInfo.Builder(url)
+                                            .setContentType(mime)
+                                            .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
+                                            .setMetadata(CastMetadata(CastMetadata.MEDIA_TYPE_TV_SHOW).apply {
+                                                putString(CastMetadata.KEY_TITLE, title.take(120))
+                                            }).build()
+                                        client.load(MediaLoadRequestData.Builder().setMediaInfo(info).build())
+                                        result.success(true) // request submitted, not playback confirmed
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) { result.success(false) }
+                    }
+                    "disconnect" -> {
+                        try {
+                            CastContext.getSharedInstance(this).sessionManager.endCurrentSession(true)
+                            result.success(true)
+                        } catch (_: Exception) { result.success(false) }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        storageChannel = MethodChannel(messenger, "sanseth_play/storage").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "availableBytes" -> try {
+                        result.success(StatFs(filesDir.absolutePath).availableBytes)
+                    } catch (_: Exception) { result.success(null) }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        pipChannel = MethodChannel(messenger, "sanseth_play/android_pip").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "isSupported" -> result.success(pipAvailable())
+                    "enter" -> {
+                        if (!pipAvailable()) result.success(false)
+                        else try {
+                            result.success(enterPictureInPictureMode(PictureInPictureParams.Builder().build()))
+                        } catch (_: Exception) { result.success(false) }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        mediaSession = MediaSession(this, "SanSethPlay").apply {
+            setCallback(object : MediaSession.Callback() {
+                override fun onPlay() { mediaChannel?.invokeMethod("play", null) }
+                override fun onPause() { mediaChannel?.invokeMethod("pause", null) }
+                override fun onSkipToNext() { mediaChannel?.invokeMethod("next", null) }
+                override fun onSkipToPrevious() { mediaChannel?.invokeMethod("previous", null) }
+                override fun onStop() { mediaChannel?.invokeMethod("stop", null) }
+                override fun onSeekTo(pos: Long) { mediaChannel?.invokeMethod("seekTo", pos) }
+            })
+            setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
+                MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
+            isActive = false
+        }
+        mediaChannel = MethodChannel(messenger, "sanseth_play/android_media_session").also { channel ->
+            channel.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "update" -> {
+                        val playing = call.argument<Boolean>("playing") ?: false
+                        val title = call.argument<String>("title") ?: "SanSeth Play"
+                        val live = call.argument<Boolean>("live") ?: true
+                        val durationMs = call.argument<Number>("durationMs")?.toLong() ?: 0L
+                        val positionMs = call.argument<Number>("positionMs")?.toLong() ?: 0L
+                        val flags = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+                            PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_STOP or
+                            PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                        val seekFlags = if (!live && durationMs > 0) PlaybackState.ACTION_SEEK_TO else 0L
+                        mediaSession?.setMetadata(MediaMetadata.Builder()
+                            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                            .putString(MediaMetadata.METADATA_KEY_ARTIST, "SanSeth Play")
+                            .putLong(MediaMetadata.METADATA_KEY_DURATION, if (live) -1 else durationMs)
+                            .build())
+                        mediaSession?.setPlaybackState(PlaybackState.Builder()
+                            .setActions(flags or seekFlags)
+                            .setState(if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                                positionMs, if (playing) 1.0f else 0.0f)
+                            .build())
+                        mediaSession?.isActive = true
+                        result.success(true)
+                    }
+                    "deactivate" -> {
+                        mediaSession?.isActive = false
+                        result.success(true)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun setPlayerImmersive(enabled: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val controller = window.decorView.windowInsetsController
+            if (enabled) {
+                controller?.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                controller?.hide(WindowInsets.Type.systemBars())
+            } else {
+                controller?.show(WindowInsets.Type.systemBars())
+            }
+        } else {
+            window.decorView.systemUiVisibility = if (enabled) {
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            } else {
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        immersiveChannel?.setMethodCallHandler(null)
+        mediaChannel?.setMethodCallHandler(null)
+        pipChannel?.setMethodCallHandler(null)
+        storageChannel?.setMethodCallHandler(null)
+        castChannel?.setMethodCallHandler(null)
+        castButton = null
+        mediaSession?.isActive = false
+        mediaSession?.release()
+        mediaSession = null
+        mediaChannel = null
+        pipChannel = null
+        immersiveChannel = null
+        super.onDestroy()
+    }
+
+    private fun pipAvailable(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+}

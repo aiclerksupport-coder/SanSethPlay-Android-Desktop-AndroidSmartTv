@@ -1,0 +1,20 @@
+{
+  "base": "SanSeth-Play-v0.1.0-REAL-IPTV-RECENTS-COMPAT-SOURCE.zip",
+  "original_count": 75,
+  "unchanged_count": 74,
+  "changed": [
+    "lib/app/home_screen.dart"
+  ],
+  "new": [
+    "docs/XTREAM_BATCH_BASE_DIFF.json",
+    "docs/MASTER_COMPLETION_GATE.md",
+    "test/xtream_client_test.dart",
+    "lib/app/xtream_browser.dart",
+    "lib/core/xtream_store.dart",
+    "lib/core/xtream_client.dart"
+  ],
+  "removed": [],
+  "branding_identical": true,
+  "flutter_compiled": false,
+  "device_verified": false
+}

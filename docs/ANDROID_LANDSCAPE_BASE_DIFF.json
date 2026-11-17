@@ -1,0 +1,25 @@
+{
+  "base_zip": "SanSeth-Play-v0.1.0-PREMIUM-UI-LIVE-ASPECT-THREE-PLATFORM-SOURCE.zip",
+  "app_version": "0.1.0+1",
+  "changed_existing_files": [
+    "lib/app/home_screen.dart",
+    "test/responsive_sizes_test.dart",
+    "tool/native_media_activity.kt.template"
+  ],
+  "added_files": [
+    "docs/ANDROID_PHONE_LANDSCAPE_FULLSCREEN.md",
+    "lib/app/android_immersive_mode.dart",
+    "lib/app/mobile_landscape_policy.dart",
+    "test/mobile_landscape_policy_test.dart",
+    "docs/ANDROID_LANDSCAPE_BASE_DIFF.json"
+  ],
+  "deleted_files": [],
+  "unchanged_original_files": 167,
+  "verification": {
+    "base_sha256_compared": true,
+    "flutter_analyze": "NOT_RUN",
+    "flutter_test": "NOT_RUN",
+    "android_release_build": "NOT_RUN",
+    "real_orientation_playback": "NOT_RUN"
+  }
+}

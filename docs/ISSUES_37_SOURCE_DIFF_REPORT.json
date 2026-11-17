@@ -1,0 +1,51 @@
+{
+  "base": "SanSeth-Play-v0.1.0-68-ANALYZER-ISSUES-REPAIR-SOURCE.zip",
+  "version": "v0.1.0+1 (unchanged)",
+  "diagnostics_in_user_log": 37,
+  "diagnostic_type": "curly_braces_in_flow_control_structures (info only)",
+  "original_file_count": 157,
+  "unchanged_files": 131,
+  "changed_files": [
+    "lib/app/brand_launch_screen.dart",
+    "lib/app/home_screen.dart",
+    "lib/app/recordings_dialog.dart",
+    "lib/app/xtream_browser.dart",
+    "lib/core/catchup.dart",
+    "lib/core/channel_cache.dart",
+    "lib/core/direct_ts_recorder.dart",
+    "lib/core/epg_cache.dart",
+    "lib/core/epg_repository.dart",
+    "lib/core/epg_schedule.dart",
+    "lib/core/hls_timeshift.dart",
+    "lib/core/hls_ts_recorder.dart",
+    "lib/core/m3u_parser.dart",
+    "lib/core/recent_channel_store.dart",
+    "lib/core/recording_recovery.dart",
+    "lib/core/recording_storage_guard.dart",
+    "lib/core/recordings_library.dart",
+    "lib/core/saved_playlist.dart",
+    "lib/core/subtitle_source.dart",
+    "lib/core/vod_resume_store.dart",
+    "lib/core/xtream_client.dart",
+    "lib/core/xtream_store.dart",
+    "lib/player/android_cast.dart",
+    "lib/player/android_media_session.dart",
+    "lib/player/player_view.dart",
+    "lib/player/windows_media_session.dart"
+  ],
+  "new_files": [
+    "docs/BRACES_REPAIR_AUDIT.json"
+  ],
+  "deleted_files": [],
+  "source_brace_blocks_added": 281,
+  "check_results": {
+    "zip_base_read": "PASS",
+    "lexical_bracket_balance": "PASS",
+    "flutter_analyze": "NOT RUN - no Dart SDK",
+    "flutter_test": "NOT RUN - no Dart SDK",
+    "android_build": "NOT RUN",
+    "windows_build": "NOT RUN",
+    "hardware": "NOT RUN"
+  },
+  "branding_sha_unchanged": true
+}

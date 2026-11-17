@@ -1,0 +1,12 @@
+{
+  "base_count": 148,
+  "unchanged": 146,
+  "changed": [
+    "BUILD_TEST_INSTALL_GITHUB.ps1",
+    "scripts/RUN_PIPELINE.ps1"
+  ],
+  "added": [
+    "INSTALL_BUILT_ANDROID.ps1",
+    "docs/BUILD_DEVICE_AFTER_BUILD_HINGLISH.md"
+  ]
+}

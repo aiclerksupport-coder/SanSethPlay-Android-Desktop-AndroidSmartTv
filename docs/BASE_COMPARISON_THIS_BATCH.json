@@ -1,0 +1,19 @@
+{
+  "base": "SanSeth-Play-v0.1.0-CONSOLIDATED-RECORDING-WINDOWS-EXPORT-SOURCE.zip",
+  "base_file_count": 109,
+  "unchanged_count": 106,
+  "modified": [
+    "lib/app/home_screen.dart",
+    "lib/core/hls_ts_recorder.dart",
+    "test/hls_ts_recorder_test.dart"
+  ],
+  "added": [
+    "docs/RECORDINGS_LIBRARY_INTEGRATION.md",
+    "lib/app/recordings_dialog.dart",
+    "lib/core/recordings_library.dart",
+    "test/recordings_library_test.dart"
+  ],
+  "deleted": [],
+  "branding_changes": [],
+  "pipeline_changes": []
+}

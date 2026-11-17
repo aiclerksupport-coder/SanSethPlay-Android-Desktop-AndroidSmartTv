@@ -1,0 +1,18 @@
+{
+  "base": "SanSeth-Play-v0.1.0-AUDIO-SUBTITLES-REMOTE-BATCH",
+  "version": "0.1.0+1",
+  "original_file_count": 55,
+  "byte_identical_files": 53,
+  "modified": [
+    "README.md",
+    "lib/player/player_view.dart"
+  ],
+  "added": [
+    "lib/player/remote_commands.dart",
+    "test/player_remote_commands_test.dart"
+  ],
+  "removed": [],
+  "sdk_available": false,
+  "compilation": "NOT RUN",
+  "hardware_tests": "NOT RUN"
+}

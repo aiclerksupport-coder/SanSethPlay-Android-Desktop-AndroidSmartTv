@@ -1,0 +1,22 @@
+{
+  "base": "SanSeth-Play-v0.1.0-RELEASE-GATE-DVR-CAST-SAFETY-SOURCE.zip",
+  "unchanged": 124,
+  "changed": [
+    "VERIFY_ANDROID_LAUNCH.ps1",
+    "lib/core/hls_timeshift.dart",
+    "lib/core/hls_ts_recorder.dart",
+    "lib/core/recording_recovery.dart",
+    "scripts/RUN_PIPELINE.ps1",
+    "test/recording_recovery_test.dart"
+  ],
+  "added": [],
+  "deleted": [],
+  "flutter_analyze": "NOT RUN \u2014 Flutter SDK unavailable",
+  "flutter_test": "NOT RUN \u2014 Flutter SDK unavailable",
+  "apk_build": "NOT RUN",
+  "windows_build": "NOT RUN",
+  "tv_device_playback": "NOT RUN",
+  "source_integrity": "CHECKED",
+  "original_branding_assets": "BYTE IDENTICAL",
+  "version": "0.1.0+1"
+}

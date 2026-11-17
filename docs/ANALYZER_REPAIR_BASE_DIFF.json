@@ -1,0 +1,24 @@
+{
+  "base_archive": "SanSeth-Play-v0.1.0-LIVE-VERBOSE-FAILURE-LOGGING-FIX-SOURCE.zip",
+  "unchanged": 144,
+  "modified": [
+    "lib/app/home_screen.dart",
+    "lib/app/xtream_browser.dart",
+    "lib/core/channel_cache.dart",
+    "lib/core/direct_ts_recorder.dart",
+    "lib/core/epg_cache.dart",
+    "lib/core/hls_timeshift.dart",
+    "lib/core/hls_ts_recorder.dart",
+    "lib/core/recording_recovery.dart",
+    "scripts/RUN_PIPELINE.ps1",
+    "tool/prepare_platforms.ps1"
+  ],
+  "new": [
+    "docs/ANALYZER_68_FIX_REPORT.json",
+    "docs/ANALYZER_REPAIR_BASE_DIFF.json",
+    "test/widget_test.dart"
+  ],
+  "deleted": [],
+  "brand_unchanged": true,
+  "flutter_sdk_available": false
+}

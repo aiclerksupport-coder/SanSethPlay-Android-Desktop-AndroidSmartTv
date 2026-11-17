@@ -1,0 +1,24 @@
+{
+  "baseline": "SanSeth-Play-v0.1.0-LIFECYCLE-PIP-CHANNEL-SAFETY-SOURCE.zip",
+  "version": "0.1.0+1",
+  "unchanged_files": 60,
+  "modified_files": [
+    "BUILD_ALL.ps1",
+    "README.md"
+  ],
+  "new_files": [
+    ".vscode/tasks.json",
+    "BUILD_ANDROID_MOBILE.ps1",
+    "BUILD_ANDROID_TV.ps1",
+    "BUILD_WINDOWS.ps1",
+    "RUN_ALL_TESTS.ps1",
+    "docs/BUILD_AND_INSTALL_HINGLISH.md",
+    "docs/RELEASE_ACCEPTANCE_CHECKLIST.md",
+    "scripts/RUN_PIPELINE.ps1"
+  ],
+  "removed_files": [],
+  "logo_assets_byte_identical": true,
+  "flutter_build_executed": false,
+  "android_install_executed": false,
+  "windows_build_executed": false
+}

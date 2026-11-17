@@ -1,0 +1,19 @@
+{
+  "baseline": "SanSeth-Play-v0.1.0-THREE-PLATFORM-BUILD-INSTALL-PIPELINE-SOURCE.zip",
+  "base_files": 71,
+  "unchanged": 67,
+  "modified": [
+    "README.md",
+    "lib/app/home_screen.dart",
+    "lib/core/m3u_parser.dart",
+    "test/m3u_parser_test.dart"
+  ],
+  "added": [
+    "docs/REAL_IPTV_SOURCE_GAP_AUDIT.md",
+    "lib/core/recent_channel_store.dart",
+    "test/recent_channel_store_test.dart"
+  ],
+  "deleted": [],
+  "branding_unchanged": true,
+  "verification": "file byte-level diff and ZIP integrity only; Flutter SDK absent"
+}

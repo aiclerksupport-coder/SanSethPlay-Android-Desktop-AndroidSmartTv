@@ -1,0 +1,258 @@
+{
+  "reported_issues": 37,
+  "log_source": "FAILED_05_flutter_analyze-v0.1.0_1(1).log",
+  "diagnostics": [
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 261,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 288,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 305,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 378,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 450,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 791,
+      "column": 23,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 947,
+      "column": 47,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 964,
+      "column": 47,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/home_screen.dart",
+      "line": 1057,
+      "column": 23,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/recordings_dialog.dart",
+      "line": 130,
+      "column": 31,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 51,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 84,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 88,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 91,
+      "column": 7,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 111,
+      "column": 42,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 119,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/app/xtream_browser.dart",
+      "line": 123,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/channel_cache.dart",
+      "line": 166,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/direct_ts_recorder.dart",
+      "line": 31,
+      "column": 7,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/epg_cache.dart",
+      "line": 58,
+      "column": 7,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/epg_cache.dart",
+      "line": 132,
+      "column": 5,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/epg_cache.dart",
+      "line": 138,
+      "column": 7,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/epg_repository.dart",
+      "line": 82,
+      "column": 5,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_timeshift.dart",
+      "line": 65,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_timeshift.dart",
+      "line": 105,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_timeshift.dart",
+      "line": 112,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_timeshift.dart",
+      "line": 184,
+      "column": 7,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_ts_recorder.dart",
+      "line": 80,
+      "column": 13,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_ts_recorder.dart",
+      "line": 212,
+      "column": 11,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/hls_ts_recorder.dart",
+      "line": 222,
+      "column": 11,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/recordings_library.dart",
+      "line": 30,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/core/saved_playlist.dart",
+      "line": 56,
+      "column": 5,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/player/android_cast.dart",
+      "line": 13,
+      "column": 7,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/player/android_cast.dart",
+      "line": 33,
+      "column": 60,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/player/player_view.dart",
+      "line": 271,
+      "column": 40,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/player/player_view.dart",
+      "line": 499,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    },
+    {
+      "file": "lib/player/player_view.dart",
+      "line": 545,
+      "column": 9,
+      "rule": "curly_braces_in_flow_control_structures"
+    }
+  ],
+  "implementation": "Semicolon-terminated if statements without braces now use explicit blocks; Dart collection-if expressions are excluded. Broader consistent safety/style wrapping made to avoid missed lint cases.",
+  "source_edits_by_file": {
+    "lib/app/brand_launch_screen.dart": 2,
+    "lib/app/home_screen.dart": 62,
+    "lib/app/recordings_dialog.dart": 14,
+    "lib/app/xtream_browser.dart": 16,
+    "lib/core/catchup.dart": 7,
+    "lib/core/channel_cache.dart": 11,
+    "lib/core/direct_ts_recorder.dart": 5,
+    "lib/core/epg_cache.dart": 13,
+    "lib/core/epg_repository.dart": 5,
+    "lib/core/epg_schedule.dart": 2,
+    "lib/core/hls_timeshift.dart": 15,
+    "lib/core/hls_ts_recorder.dart": 15,
+    "lib/core/m3u_parser.dart": 3,
+    "lib/core/recent_channel_store.dart": 1,
+    "lib/core/recording_recovery.dart": 7,
+    "lib/core/recording_storage_guard.dart": 1,
+    "lib/core/recordings_library.dart": 7,
+    "lib/core/saved_playlist.dart": 5,
+    "lib/core/subtitle_source.dart": 1,
+    "lib/core/vod_resume_store.dart": 1,
+    "lib/core/xtream_client.dart": 10,
+    "lib/core/xtream_store.dart": 1,
+    "lib/player/android_cast.dart": 4,
+    "lib/player/android_media_session.dart": 4,
+    "lib/player/player_view.dart": 67,
+    "lib/player/windows_media_session.dart": 2
+  },
+  "verification": "No Dart SDK installed in assistant environment. Syntax/analyzer/runtime must be checked on Windows Flutter toolchain."
+}

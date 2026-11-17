@@ -1,0 +1,16 @@
+{
+  "base": "SanSeth-Play-v0.1.0-EPG-TIMELINE-AUTOREFRESH-BATCH",
+  "new": "SanSeth-Play-v0.1.0-EPG-OFFLINE-GZIP-BATCH",
+  "old_files": 49,
+  "identical": 46,
+  "modified": [
+    "README.md",
+    "lib/app/home_screen.dart",
+    "lib/core/epg_repository.dart"
+  ],
+  "added": [
+    "lib/core/epg_cache.dart",
+    "test/epg_offline_codec_test.dart"
+  ],
+  "removed": []
+}

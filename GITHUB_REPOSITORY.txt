@@ -1,0 +1,3 @@
+https://github.com/aiclerksupport-coder/SanSethPlay-Android-Desktop-AndroidSmartTv
+Branch: main
+Push policy: After all three device/install stages pass. No force push.

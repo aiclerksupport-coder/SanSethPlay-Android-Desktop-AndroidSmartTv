@@ -1,0 +1,38 @@
+{
+  "base_zip": "SanSeth-Play-v0.1.0-RECORDINGS-LIBRARY-HLS-SAFETY-SOURCE.zip",
+  "version": "0.1.0+1",
+  "unchanged": 107,
+  "modified": [
+    "lib/app/recordings_dialog.dart",
+    "lib/core/direct_ts_recorder.dart",
+    "lib/core/hls_ts_recorder.dart",
+    "lib/core/recordings_library.dart",
+    "lib/player/player_view.dart",
+    "tool/native_media_activity.kt.template",
+    "tool/prepare_platforms.ps1"
+  ],
+  "added": [
+    "lib/core/recording_recovery.dart",
+    "lib/core/recording_storage_guard.dart",
+    "lib/player/android_cast.dart",
+    "test/cast_url_test.dart",
+    "test/recording_recovery_test.dart",
+    "tool/cast_options_provider.kt.template",
+    "docs/TARGETED_PENDING_MODULES_BASE_DIFF.json",
+    "docs/TARGETED_PENDING_MODULES_README.md"
+  ],
+  "removed": [],
+  "branding_unchanged": 11,
+  "verification": {
+    "zip_integrity": "pending",
+    "flutter_sdk": "not_available",
+    "dart_format": "not_run",
+    "flutter_analyze": "not_run",
+    "flutter_tests": "not_run",
+    "android_apk": "not_run",
+    "windows_exe": "not_run",
+    "android_tv_device": "not_run",
+    "google_cast_receiver": "not_run",
+    "windows_installer": "not_run"
+  }
+}

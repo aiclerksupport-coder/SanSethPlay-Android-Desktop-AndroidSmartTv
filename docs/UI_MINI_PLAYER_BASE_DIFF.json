@@ -1,0 +1,43 @@
+{
+  "base": "SanSeth-Play-v0.1.0-ANDROID-AUTO-LANDSCAPE-FULLSCREEN-SOURCE.zip",
+  "version": "0.1.0+1",
+  "unchanged_files": 167,
+  "changed_files": [
+    "README.md",
+    "lib/app/brand_launch_screen.dart",
+    "lib/app/home_screen.dart",
+    "lib/player/player_view.dart",
+    "test/home_navigation_ui_test.dart",
+    "test/keyboard_focus_test.dart",
+    "test/responsive_sizes_test.dart",
+    "test/widget_smoke_test.dart"
+  ],
+  "new_files": [
+    "LICENSE",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "TERMS.md",
+    "THIRD_PARTY_NOTICES.md",
+    "assets/branding/app_icon_header_transparent.png",
+    "docs/UI_MINI_PLAYER_ACCEPTANCE.md",
+    "docs/UI_MINI_PLAYER_BASE_DIFF.json",
+    "lib/app/about_dialog.dart",
+    "test/import_sheet_ui_test.dart"
+  ],
+  "deleted_files": [],
+  "unmodified_approved_assets": true,
+  "verification": {
+    "ZIP_integrity": "to be checked post package",
+    "Dart_Flutter_analyze": "NOT RUN - Flutter SDK unavailable",
+    "Flutter_test": "NOT RUN - Flutter SDK unavailable",
+    "APK_build_install": "NOT RUN - Android SDK and device unavailable",
+    "Windows_build": "NOT RUN - Windows compiler unavailable",
+    "Android_TV_remote": "NOT RUN - device unavailable"
+  },
+  "notes": [
+    "Mini-player is an in-app floating pane, not a system-wide floating overlay.",
+    "Android 12+ system splash uses constrained OS icon before full portrait Flutter splash.",
+    "Native M3U file-picker is not implemented in this batch, and no fake file-upload button was added.",
+    "GitHub repository has not been pushed; legal drafts require owner review and third-party notices audit."
+  ]
+}
