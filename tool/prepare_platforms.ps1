@@ -20,6 +20,13 @@ if ($permission.Count -eq 0) {
   $node.SetAttribute('name', $androidNs, 'android.permission.INTERNET')
   [void]$root.PrependChild($node)
 }
+# local_auth uses OS biometrics/device credentials; never embedded master PIN.
+$biometric = @($root.SelectNodes('uses-permission') | Where-Object { $_.GetAttribute('name', $androidNs) -eq 'android.permission.USE_BIOMETRIC' })
+if ($biometric.Count -eq 0) {
+  $node = $xml.CreateElement('uses-permission')
+  $node.SetAttribute('name', $androidNs, 'android.permission.USE_BIOMETRIC')
+  [void]$root.PrependChild($node)
+}
 foreach ($featureName in @('android.hardware.touchscreen', 'android.software.leanback')) {
   $existing = @($root.SelectNodes('uses-feature') | Where-Object { $_.GetAttribute('name', $androidNs) -eq $featureName })
   if ($existing.Count -eq 0) {

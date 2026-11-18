@@ -33,6 +33,7 @@ class PlayerView extends StatefulWidget {
     this.compact = false,
     this.onExitFullscreen,
     this.onControlsInteraction,
+    this.onPlaybackHealth,
   });
 
   final StreamChannel channel;
@@ -45,6 +46,9 @@ class PlayerView extends StatefulWidget {
   final bool compact;
   final VoidCallback? onExitFullscreen;
   final VoidCallback? onControlsInteraction;
+
+  /// Called only by the real playback session, never by a URL preflight.
+  final void Function(Uri url, bool playing)? onPlaybackHealth;
 
   @override
   State<PlayerView> createState() => _PlayerViewState();
@@ -64,6 +68,11 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   Timer? _errorConfirmationTimer;
   Timer? _bufferingHintTimer;
   Timer? _startupWatchdog;
+  Timer? _stallWatchdog;
+  Timer? _healthConfirmationTimer;
+  DateTime? _stallSince;
+  int _healthReportedGeneration = -1;
+  bool _recoveringFromStall = false;
   Timer? _overlayHideTimer;
   bool _overlayVisible = true;
   bool _phoneLandscape = false;
@@ -215,6 +224,57 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   bool get _canSeek => _duration.inMilliseconds > 0;
   bool get _canRotate => Platform.isAndroid;
 
+  void _confirmPlaybackWhenStable() {
+    _healthConfirmationTimer?.cancel();
+    if (!_playing ||
+        _buffering ||
+        _loading ||
+        _healthReportedGeneration == _generation) {
+      return;
+    }
+    final generation = _generation;
+    _healthConfirmationTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted ||
+          generation != _generation ||
+          !_playing ||
+          _buffering ||
+          _loading ||
+          _healthReportedGeneration == generation) {
+        return;
+      }
+      _healthReportedGeneration = generation;
+      _attempts = 0;
+      widget.onPlaybackHealth?.call(widget.channel.url, true);
+    });
+  }
+
+  void _armLiveStallWatchdog() {
+    if (widget.channel.isVod ||
+        !_playing ||
+        !_buffering ||
+        _stallSince != null) {
+      return;
+    }
+    final generation = _generation;
+    _stallSince = DateTime.now();
+    _stallWatchdog?.cancel();
+    _stallWatchdog = Timer(const Duration(seconds: 15), () {
+      if (!mounted ||
+          generation != _generation ||
+          !_buffering ||
+          !_playing ||
+          _recoveringFromStall ||
+          _channelRequests.hasPending ||
+          _recording) {
+        return;
+      }
+      // Do not reload during a short segment transition or ongoing capture.
+      _recoveringFromStall = true;
+      _attempts = 0;
+      unawaited(_open());
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -257,7 +317,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         return;
       }
       if (value) {
-        _attempts = 0;
         _retryTimer?.cancel();
         _errorConfirmationTimer?.cancel();
         _startupWatchdog?.cancel();
@@ -269,6 +328,12 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
           _error = null;
         }
       });
+      if (value) {
+        _armLiveStallWatchdog();
+        _confirmPlaybackWhenStable();
+      } else {
+        _healthConfirmationTimer?.cancel();
+      }
       _scheduleMediaSync();
     });
     _durationSubscription = _player.stream.duration.listen((value) {
@@ -302,6 +367,10 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       }
       _bufferingHintTimer?.cancel();
       if (!value) {
+        _stallWatchdog?.cancel();
+        _stallSince = null;
+        _recoveringFromStall = false;
+        _confirmPlaybackWhenStable();
         if (_buffering || _showBufferingHint) {
           setState(() {
             _buffering = false;
@@ -310,6 +379,8 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         }
       } else {
         _buffering = true;
+        _healthConfirmationTimer?.cancel();
+        _armLiveStallWatchdog();
         // Short decoder/network stalls are common on live HLS. Do not flash
         // a buffering banner for every segment transition.
         _bufferingHintTimer = Timer(const Duration(seconds: 3), () {
@@ -415,11 +486,16 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         _errorConfirmationTimer?.cancel();
         _bufferingHintTimer?.cancel();
         _startupWatchdog?.cancel();
+        _stallWatchdog?.cancel();
+        _healthConfirmationTimer?.cancel();
+        _stallSince = null;
         final generation = ++_generation;
         _resumeChecked = false;
         _lastSavedSecond = -1;
         setState(() {
-          _loading = true;
+          // During an automatic stall recovery retain the last video frame
+          // and avoid flashing a fullscreen loader or reconnect banner.
+          _loading = !_recoveringFromStall;
           _playing = false;
           _error = null;
           _showBufferingHint = false;
@@ -491,6 +567,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       return;
     }
     if (_attempts >= _retryDelays.length) {
+      widget.onPlaybackHealth?.call(widget.channel.url, false);
       setState(() {
         _loading = false;
         _error = 'Stream unavailable. Link, network ya codec check karein.';
@@ -498,11 +575,13 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       return;
     }
     final delay = _retryDelays[_attempts++];
-    setState(() {
-      _loading = false;
-      _error =
-          'Stream reconnect ho raha hai ($_attempts/${_retryDelays.length})';
-    });
+    if (!_recoveringFromStall) {
+      setState(() {
+        _loading = false;
+        _error =
+            'Stream reconnect ho raha hai ($_attempts/${_retryDelays.length})';
+      });
+    }
     _retryTimer = Timer(delay, () {
       if (mounted) {
         _open();
@@ -1495,6 +1574,11 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       _errorConfirmationTimer?.cancel();
       _bufferingHintTimer?.cancel();
       _startupWatchdog?.cancel();
+      _stallWatchdog?.cancel();
+      _healthConfirmationTimer?.cancel();
+      _stallSince = null;
+      _healthReportedGeneration = -1;
+      _recoveringFromStall = false;
       _attempts = 0;
       unawaited(_open());
       _scheduleMediaSync();
@@ -1517,6 +1601,8 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     _errorConfirmationTimer?.cancel();
     _bufferingHintTimer?.cancel();
     _startupWatchdog?.cancel();
+    _stallWatchdog?.cancel();
+    _healthConfirmationTimer?.cancel();
     _overlayHideTimer?.cancel();
     _mediaSync?.cancel();
     unawaited(_mediaSession.dispose());

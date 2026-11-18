@@ -3,7 +3,9 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:local_auth/local_auth.dart';
 import '../core/channel.dart';
+import '../core/channel_health.dart';
 import '../core/channel_categories.dart';
 import '../core/channel_cache.dart';
 import '../core/epg_repository.dart';
@@ -13,6 +15,7 @@ import '../core/recent_channel_store.dart';
 import '../core/playlist_repository.dart';
 import '../core/playlist_store.dart';
 import '../core/saved_playlist.dart';
+import '../core/playlist_privacy.dart';
 import '../core/last_watched_store.dart';
 import '../player/player_view.dart';
 import 'mobile_landscape_policy.dart';
@@ -33,13 +36,52 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _repository = PlaylistRepository();
   final _favoritesStore = FavoriteStore();
   final _recentStore = RecentChannelStore();
   List<String> _recentHashes = const [];
   Future<void> _recentWrite = Future<void>.value();
   final _cache = ChannelCache();
+  final _health = ChannelHealthStore();
+  late final ChannelHealthScanner _healthScanner =
+      ChannelHealthScanner(_health);
+  bool _hideUnavailable = true;
+  int _scanCursor = 0;
+  Timer? _scanTimer;
+
+  void _onPlaybackHealth(Uri url, bool healthy) {
+    if (healthy) {
+      _health.playing(url);
+    } else {
+      _health.playbackFailed(url);
+    }
+  }
+
+  void _enqueueHealthBatch() {
+    if (!mounted || _channels.isEmpty) return;
+    // Prioritize currently displayed/favorite channels, then scan the rest
+    // incrementally. Never probe current playback (no competing decoder).
+    _healthScanner.activePlayback = _selected?.url;
+    final eligible = _visibleChannels().take(15).map((c) => c.url);
+    _healthScanner.enqueue(eligible);
+    final next = <Uri>[];
+    for (var i = 0; i < 15 && _channels.isNotEmpty; i++) {
+      next.add(_channels[_scanCursor % _channels.length].url);
+      _scanCursor++;
+    }
+    _healthScanner.enqueue(next);
+  }
+
+  void _scheduleHealthChecks() {
+    if (_channels.isEmpty) return;
+    _scanTimer ??= Timer.periodic(const Duration(seconds: 25), (_) {
+      _health.expire();
+      _enqueueHealthBatch();
+    });
+    _enqueueHealthBatch();
+  }
+
   final _epgRepository = EpgRepository();
   final _epgCache = EpgCache();
   Map<String, List<EpgProgram>> _programs = const {};
@@ -52,6 +94,216 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _epgFetching = false;
   bool _epgRefreshQueued = false;
   final PlaylistStore _playlistStore = SecurePlaylistStore();
+  final PlaylistPrivacyStore _privacyStore = PlaylistPrivacyStore();
+  final LocalAuthentication _localAuth = LocalAuthentication();
+  Map<String, PlaylistPrivacy> _privacy = {};
+  final Set<String> _unlockedPlaylists = {};
+  bool _ownerPromptBusy = false;
+  bool _privacyChangeBusy = false;
+  bool _hiddenManagementOpen = false;
+  int _failedOwnerAttempts = 0;
+  DateTime? _ownerRetryAfter;
+
+  bool _protected(SavedPlaylist item) => _privacy[item.id]?.protected ?? false;
+  bool _hidden(SavedPlaylist item) => _privacy[item.id]?.hidden ?? false;
+  bool _locked(SavedPlaylist item) => _privacy[item.id]?.locked ?? false;
+  bool _canOpen(SavedPlaylist item) =>
+      !_protected(item) || _unlockedPlaylists.contains(item.id);
+
+  Future<String?> _requestSecret(String heading,
+      {bool allowRecovery = false}) async {
+    if (!mounted) return null;
+    var input = '';
+    final result = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text(heading),
+              content: TextField(
+                onChanged: (value) => input = value,
+                autofocus: false,
+                obscureText: true,
+                keyboardType:
+                    allowRecovery ? TextInputType.text : TextInputType.number,
+                maxLength: allowRecovery ? 32 : 12,
+                decoration: InputDecoration(
+                    hintText: allowRecovery
+                        ? 'Owner recovery code'
+                        : '6–12 digit owner PIN'),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cancel')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx, input),
+                    child: const Text('Continue')),
+              ],
+            ));
+    return result;
+  }
+
+  Future<void> _showRecoveryCode(String code) async {
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+              title: const Text('Save your owner recovery code'),
+              content: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text(
+                    'Ye code sirf ek baar dikhega. Paper par likhkar secure jagah rakhein. App ke andar dobara show nahi hoga.'),
+                const SizedBox(height: 16),
+                SelectableText(code,
+                    style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2)),
+              ]),
+              actions: [
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('I saved the code'))
+              ],
+            ));
+  }
+
+  Future<bool> _ensureOwnerPin() async {
+    if (await _privacyStore.hasPin) return true;
+    final first = await _requestSecret('Set owner PIN');
+    if (first == null) return false;
+    final confirm = await _requestSecret('Confirm owner PIN');
+    if (first != confirm || !PlaylistPrivacyStore.isAcceptablePin(first)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('PIN mismatch. Use 6–12 digits.')));
+      }
+      return false;
+    }
+    await _privacyStore.setPin(first);
+    final code = await _privacyStore.makeRecoveryCode();
+    await _showRecoveryCode(code);
+    return true;
+  }
+
+  Future<bool> _authenticateOwner({bool allowSetup = true}) async {
+    if (_ownerPromptBusy || !mounted) return false;
+    final now = DateTime.now();
+    if (_ownerRetryAfter != null && now.isBefore(_ownerRetryAfter!)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Too many attempts. Try again later.')));
+      return false;
+    }
+    _ownerPromptBusy = true;
+    try {
+      // OS authentication is preferred for phones and Windows Hello.
+      // Android TV without biometric/credential setup falls back to owner PIN.
+      try {
+        if (await _localAuth.isDeviceSupported()) {
+          final allowed = await _localAuth.authenticate(
+            localizedReason: 'Verify owner to manage protected playlists',
+            biometricOnly: false,
+            persistAcrossBackgrounding: true,
+          );
+          if (allowed) _failedOwnerAttempts = 0;
+          return allowed; // Explicit OS denial/cancel must never fall back to PIN setup.
+        }
+      } catch (_) {/* Unsupported devices use owner PIN/recovery. */}
+      if (!await _privacyStore.hasPin) {
+        if (!allowSetup) return false;
+        return await _ensureOwnerPin();
+      }
+      final pin = await _requestSecret('Owner verification');
+      if (pin == null) return false;
+      if (await _privacyStore.verifyPin(pin)) {
+        _failedOwnerAttempts = 0;
+        return true;
+      }
+      // Recovery entry is separate: arbitrary wrong PIN never unlocks.
+      final recovery = await _requestSecret('Forgot PIN? Enter recovery code',
+          allowRecovery: true);
+      if (recovery != null && await _privacyStore.verifyRecovery(recovery)) {
+        _failedOwnerAttempts = 0;
+        final newPin = await _requestSecret('New owner PIN');
+        if (newPin != null && PlaylistPrivacyStore.isAcceptablePin(newPin)) {
+          await _privacyStore.setPin(newPin);
+          final code = await _privacyStore.makeRecoveryCode();
+          await _showRecoveryCode(code);
+          return true;
+        }
+      }
+      _failedOwnerAttempts++;
+      if (_failedOwnerAttempts >= 5) {
+        _ownerRetryAfter = DateTime.now().add(const Duration(minutes: 2));
+        _failedOwnerAttempts = 0;
+      }
+      return false;
+    } finally {
+      _ownerPromptBusy = false;
+    }
+  }
+
+  Future<void> _configurePrivacy(SavedPlaylist item,
+      {required bool hidden, required bool locked}) async {
+    if (_privacyChangeBusy) return;
+    _privacyChangeBusy = true;
+    try {
+      if (!await _authenticateOwner()) return;
+      if (!mounted) return;
+      final next = Map<String, PlaylistPrivacy>.of(_privacy);
+      final updated = PlaylistPrivacy(hidden: hidden, locked: locked);
+      if (updated.protected) {
+        next[item.id] = updated;
+      } else {
+        next.remove(item.id);
+      }
+      await _privacyStore.save(next);
+      if (!mounted) return;
+      setState(() {
+        _privacy = next;
+        if (updated.protected) _unlockedPlaylists.remove(item.id);
+      });
+      if (updated.protected && _activePlaylistId == item.id) {
+        _clearSession(); // stop decoding/mini-player immediately, no title leak
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Playlist privacy save failed.')));
+      }
+    } finally {
+      _privacyChangeBusy = false;
+    }
+  }
+
+  Future<void> _manageHiddenPlaylists() async {
+    if (!await _authenticateOwner()) return;
+    if (!mounted) return;
+    _hiddenManagementOpen = true;
+    try {
+      await _browseSavedPlaylists(includeHidden: true);
+    } finally {
+      _hiddenManagementOpen = false;
+    }
+  }
+
+  Future<void> _changeOwnerPin() async {
+    if (!await _authenticateOwner()) return;
+    if (!mounted) return;
+    final pin = await _requestSecret('Enter new owner PIN');
+    if (pin == null) return;
+    final confirm = await _requestSecret('Confirm new owner PIN');
+    if (confirm != pin || !PlaylistPrivacyStore.isAcceptablePin(pin)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('PIN mismatch or invalid length.')));
+      }
+      return;
+    }
+    await _privacyStore.setPin(pin);
+    final code = await _privacyStore.makeRecoveryCode();
+    await _showRecoveryCode(code);
+  }
+
   final _lastWatchedStore = LastWatchedStore();
   LastWatched? _lastWatched;
   Future<void> _lastWatchedWrite = Future<void>.value();
@@ -113,6 +365,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _health.addListener(_healthChanged);
+    unawaited(_health.restore());
     _loadFavorites();
     _loadRecent();
     _restorePlaylists();
@@ -227,9 +482,45 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _healthChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _scheduleHealthChecks();
+    } else {
+      // Do not keep health network requests queued while not visible.
+      _scanTimer?.cancel();
+      _scanTimer = null;
+      _healthScanner.clear();
+      // Never leave hidden playlist names visible in an open owner dialog
+      // after the app backgrounds and a different household user returns.
+      if (_hiddenManagementOpen && mounted) {
+        _hiddenManagementOpen = false;
+        Navigator.of(context, rootNavigator: true)
+            .popUntil((route) => route.isFirst);
+      }
+      if (_unlockedPlaylists.isNotEmpty) {
+        _unlockedPlaylists.clear();
+        if (_activePlaylistId != null &&
+            _savedPlaylists
+                .any((p) => p.id == _activePlaylistId && _protected(p))) {
+          _clearSession();
+        }
+      }
+    }
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _landscapeControlTimer?.cancel();
+    _scanTimer?.cancel();
+    _healthScanner.dispose();
+    _health.removeListener(_healthChanged);
+    _health.dispose();
     if (_systemUiImmersive) {
       unawaited(AndroidImmersiveMode.setEnabled(false));
     }
@@ -246,6 +537,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _select(StreamChannel channel) {
+    if (_activePlaylistId != null &&
+        _savedPlaylists.any((p) => p.id == _activePlaylistId && !_canOpen(p))) {
+      return;
+    }
     // Selecting a channel must close the software keyboard if the user was
     // searching; keep keyboard/remote shortcuts on the non-editable root.
     if (_searchFocus.hasFocus) {
@@ -263,6 +558,7 @@ class _HomeScreenState extends State<HomeScreen> {
     // PlayerView already serializes opens with latest-channel-wins.
     // Do not silently drop the last remote key selection during a throttle.
     setState(() => _selected = channel);
+    _healthScanner.activePlayback = channel.url;
     _recordRecent(channel);
     final playlistId = _activePlaylistId;
     if (playlistId != null) {
@@ -302,6 +598,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _restorePlaylists() async {
     try {
+      final states = await _privacyStore.load();
       final saved = await _playlistStore.load();
       if (!mounted) {
         return;
@@ -310,20 +607,26 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) {
         return;
       }
-      final restored =
-          last != null && saved.any((item) => item.id == last.playlistId)
-              ? last
-              : null;
+      final restored = last != null &&
+              saved.any((item) =>
+                  item.id == last.playlistId &&
+                  !(states[item.id]?.protected ?? false))
+          ? last
+          : null;
       setState(() {
         _savedPlaylists = saved;
+        _privacy = states;
         _lastWatched = restored;
       });
-      if (saved.isNotEmpty) {
+      final accessible = saved
+          .where((item) => !(states[item.id]?.protected ?? false))
+          .toList();
+      if (accessible.isNotEmpty) {
         final match = restored == null
             ? null
             : saved.where((p) => p.id == restored.playlistId);
         await _openPlaylist(
-            match != null && match.isNotEmpty ? match.first : saved.first);
+            match != null && match.isNotEmpty ? match.first : accessible.first);
       }
     } catch (_) {
       if (mounted) {
@@ -359,8 +662,15 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openPlaylist(SavedPlaylist playlist) async {
-    if (_busy) {
-      return;
+    if (_busy) return;
+    if (!_canOpen(playlist)) {
+      if (!await _authenticateOwner(allowSetup: false)) return;
+      if (!mounted) return;
+      _unlockedPlaylists.add(playlist.id);
+    }
+
+    if (_activePlaylistId != null && _activePlaylistId != playlist.id) {
+      _unlockedPlaylists.remove(_activePlaylistId);
     }
     final generation = ++_loadGeneration;
     setState(() {
@@ -369,6 +679,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _selected = null;
       _multiviewSecondary = null;
       _channels = const [];
+      _healthScanner.clear();
+      _scanCursor = 0;
       _message = 'Opening saved playlist...';
     });
     // Offline-first: show last-known-good cache BEFORE doing network work.
@@ -385,6 +697,7 @@ class _HomeScreenState extends State<HomeScreen> {
           _search.clear();
           _message = '${cached.length} cached channels • Checking for updates';
         });
+        _scheduleHealthChecks();
       }
     } catch (_) {
       // Cache may be unavailable following OS credential reset; network still works.
@@ -415,6 +728,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _search.clear();
         _message = '${loaded.length} channels updated';
       });
+      _healthScanner.clear();
+      _scanCursor = 0;
+      _scheduleHealthChecks();
       // Cache is a best-effort optimization, never a reason to fail import.
       try {
         final stored = await _cache.save(playlist.id, loaded);
@@ -964,10 +1280,14 @@ class _HomeScreenState extends State<HomeScreen> {
         await _lastWatchedStore.clear();
       }
       try {
+        await _privacyStore.clearPlaylist(active);
+      } catch (_) {}
+      try {
         await _cache.remove(active);
       } catch (_) {/* stale cache only */}
-      if (next.isNotEmpty) {
-        await _openPlaylist(next.first);
+      final available = next.where((p) => !_protected(p));
+      if (available.isNotEmpty) {
+        await _openPlaylist(available.first);
       }
     } catch (_) {
       if (mounted) {
@@ -981,6 +1301,9 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _channels = const [];
       _selected = null;
+      _multiviewSecondary = null;
+      _miniPlayer = false;
+      _healthScanner.clear();
       _activePlaylistId = null;
       _busy = false;
       _group = 'All groups';
@@ -996,14 +1319,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     final active = _savedPlaylists.where((p) => p.id == _activePlaylistId);
-    if (active.isNotEmpty) {
+    if (active.isNotEmpty && _canOpen(active.first)) {
       _openPlaylist(active.first);
     }
   }
 
   /// Searchable source management. Each row offers Open, Edit and Delete;
   /// commit to secure storage BEFORE updating visible state.
-  Future<void> _browseSavedPlaylists() async {
+  Future<void> _browseSavedPlaylists({bool includeHidden = false}) async {
     if (_sourceMutationBusy) {
       return;
     }
@@ -1013,7 +1336,9 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (dialogContext) =>
           StatefulBuilder(builder: (dialogContext, setDialogState) {
         final filtered = _savedPlaylists
-            .where((item) => item.name.toLowerCase().contains(query))
+            .where((item) =>
+                (includeHidden || !_hidden(item)) &&
+                item.name.toLowerCase().contains(query))
             .toList(growable: false);
         final available = MediaQuery.sizeOf(dialogContext);
         final keyboard = MediaQuery.viewInsetsOf(dialogContext).bottom;
@@ -1027,8 +1352,12 @@ class _HomeScreenState extends State<HomeScreen> {
             const Icon(Icons.video_library_rounded, color: _gold),
             const SizedBox(width: 12),
             Expanded(
-                child: Text('Saved playlists (${_savedPlaylists.length})',
-                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+                child: Text(
+                    includeHidden
+                        ? 'Manage protected playlists'
+                        : 'Saved playlists (${_savedPlaylists.where((p) => !_hidden(p)).length})',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis)),
           ]),
           content: SizedBox(
               width: dialogWidth,
@@ -1064,10 +1393,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                         fontWeight: FontWeight.w700)),
-                                subtitle: Text(
-                                    item.kind == PlaylistKind.directStream
-                                        ? 'Direct stream'
-                                        : 'M3U playlist'),
+                                subtitle: Text(_locked(item)
+                                    ? 'Locked • PIN required'
+                                    : (_hidden(item)
+                                        ? 'Hidden'
+                                        : (item.kind ==
+                                                PlaylistKind.directStream
+                                            ? 'Direct stream'
+                                            : 'M3U playlist'))),
                                 onTap: () {
                                   Navigator.pop(dialogContext);
                                   unawaited(_openPlaylist(item));
@@ -1081,7 +1414,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                   if (_sourceMutationBusy) {
                                     return;
                                   }
-                                  if (action == 'edit') {
+                                  if ((action == 'edit' ||
+                                          action == 'delete') &&
+                                      _protected(item) &&
+                                      !await _authenticateOwner()) {
+                                    return;
+                                  }
+                                  if (action == 'hide') {
+                                    await _configurePrivacy(item,
+                                        hidden: !_hidden(item),
+                                        locked: _locked(item));
+                                  } else if (action == 'lock') {
+                                    await _configurePrivacy(item,
+                                        hidden: _hidden(item),
+                                        locked: !_locked(item));
+                                  } else if (action == 'edit') {
                                     await _editSavedPlaylist(item);
                                   } else if (action == 'delete') {
                                     await _deleteSavedPlaylist(item);
@@ -1090,11 +1437,21 @@ class _HomeScreenState extends State<HomeScreen> {
                                     setDialogState(() {});
                                   }
                                 },
-                                itemBuilder: (_) => const [
+                                itemBuilder: (_) => [
                                   PopupMenuItem(
+                                      value: 'hide',
+                                      child: Text(_hidden(item)
+                                          ? 'Unhide playlist'
+                                          : 'Hide playlist')),
+                                  PopupMenuItem(
+                                      value: 'lock',
+                                      child: Text(_locked(item)
+                                          ? 'Remove playlist lock'
+                                          : 'Lock playlist')),
+                                  const PopupMenuItem(
                                       value: 'edit',
                                       child: Text('Edit name / URL')),
-                                  PopupMenuItem(
+                                  const PopupMenuItem(
                                       value: 'delete',
                                       child: Text('Delete playlist')),
                                 ],
@@ -1193,6 +1550,10 @@ class _HomeScreenState extends State<HomeScreen> {
       if (changedUrl) {
         ++_loadGeneration; // invalidate any obsolete download
         try {
+          await _privacyStore.clearPlaylist(item.id);
+        } catch (_) {}
+        _unlockedPlaylists.remove(item.id);
+        try {
           await _cache.remove(item.id);
         } catch (_) {/* cache best effort */}
         await _lastWatchedWrite.catchError((Object _) {});
@@ -1259,12 +1620,17 @@ class _HomeScreenState extends State<HomeScreen> {
         await _lastWatchedStore.clear();
       }
       try {
+        await _privacyStore.clearPlaylist(item.id);
+      } catch (_) {}
+      _unlockedPlaylists.remove(item.id);
+      try {
         await _cache.remove(item.id);
       } catch (_) {/* noncritical */}
       if (_activePlaylistId == item.id) {
         _clearSession();
-        if (next.isNotEmpty) {
-          await _openPlaylist(next.first);
+        final available = next.where((p) => !_protected(p));
+        if (available.isNotEmpty) {
+          await _openPlaylist(available.first);
         }
       }
     } catch (_) {
@@ -1299,6 +1665,12 @@ class _HomeScreenState extends State<HomeScreen> {
       for (var i = 0; i < _recentHashes.length; i++) _recentHashes[i]: i,
     };
     final result = _channels.where((channel) {
+      if (_hideUnavailable &&
+          _health.hasConfirmedUnavailable &&
+          channel.url != _selected?.url &&
+          _health.status(channel.url) == ChannelHealth.unavailable) {
+        return false;
+      }
       // Hash only when the corresponding filter is selected. On 50k+
       // channels, SHA-256 for every item on every normal build causes jank.
       if (_filter == ChannelFilter.recent &&
@@ -1360,8 +1732,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final tv = _tvPreview || (size.width >= 1250 && size.height >= 650);
     final visible = _visibleChannels();
     final mini = _miniPlayer && _selected != null && !mobileLandscape;
-    final channelBrowserOnly =
-        _navIndex == 2 && _selected == null && !mobileLandscape;
+    // On compact screens, an empty player preview used to reduce the sidebar
+    // below 300 px and hide playlist/filter controls entirely. Show the channel
+    // browser first until a stream is selected; keep normal playback unchanged.
+    final compactEmptyLibrary =
+        _selected == null && size.width < 850 && size.height < 720;
+    final channelBrowserOnly = (_navIndex == 2 || compactEmptyLibrary) &&
+        _selected == null &&
+        !mobileLandscape;
 
     return CallbackShortcuts(
       bindings: {
@@ -1424,7 +1802,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           showDialog<void>(
                               context: context,
                               builder: (_) =>
-                                  RecordingsDialog(onPlay: _select));
+                                  RecordingsDialog(onPlay: (channel) {
+                                    if (_activePlaylistId == null ||
+                                        _savedPlaylists.any((p) =>
+                                            p.id == _activePlaylistId &&
+                                            _canOpen(p))) {
+                                      _select(channel);
+                                    }
+                                  }));
                         }
                         if (value == 'epg') {
                           _loadEpg();
@@ -1446,6 +1831,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         }
                         if (value == 'saved') {
                           _browseSavedPlaylists();
+                        }
+                        if (value == 'hidden') {
+                          _manageHiddenPlaylists();
+                        }
+                        if (value == 'owner-pin') {
+                          _changeOwnerPin();
                         }
                         if (value == 'about') {
                           _showAbout();
@@ -1484,6 +1875,32 @@ class _HomeScreenState extends State<HomeScreen> {
                                 Icon(Icons.chevron_right_rounded,
                                     size: 19, color: _gold)
                               ])),
+                        const PopupMenuItem(
+                            value: 'hidden',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.shield_outlined,
+                                  color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('Manage hidden playlists',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600)))
+                            ])),
+                        const PopupMenuItem(
+                            value: 'owner-pin',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.password_rounded,
+                                  color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('Set / change owner PIN',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis))
+                            ])),
                         const PopupMenuItem(
                             value: 'provider',
                             height: 58,
@@ -1860,7 +2277,14 @@ class _HomeScreenState extends State<HomeScreen> {
                               showDialog<void>(
                                   context: context,
                                   builder: (_) =>
-                                      RecordingsDialog(onPlay: _select));
+                                      RecordingsDialog(onPlay: (channel) {
+                                        if (_activePlaylistId == null ||
+                                            _savedPlaylists.any((p) =>
+                                                p.id == _activePlaylistId &&
+                                                _canOpen(p))) {
+                                          _select(channel);
+                                        }
+                                      }));
                             }
                             if (value == 'provider') {
                               _openProvider();
@@ -1967,7 +2391,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                         child: PlayerView(
                                             key: const ValueKey(
                                                 'sanseth-multiview-primary'),
-                                            channel: _selected!)),
+                                            channel: _selected!,
+                                            onPlaybackHealth:
+                                                _onPlaybackHealth)),
                                     const VerticalDivider(
                                         width: 3, color: Color(0xFFF4C65B)),
                                     Expanded(
@@ -1976,12 +2402,15 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 'sanseth-multiview-secondary'),
                                             channel: _multiviewSecondary!,
                                             initialVolume: 0,
-                                            enableSystemMediaSession: false)),
+                                            enableSystemMediaSession: false,
+                                            onPlaybackHealth:
+                                                _onPlaybackHealth)),
                                   ])
                                 : PlayerView(
                                     key: const ValueKey(
                                         'sanseth-primary-player'),
                                     channel: _selected!,
+                                    onPlaybackHealth: _onPlaybackHealth,
                                     compact: compact,
                                     onControlsInteraction:
                                         _revealLandscapeControls,
@@ -2146,147 +2575,191 @@ class _HomeScreenState extends State<HomeScreen> {
                             Text('${visible.length}',
                                 style: const TextStyle(color: _gold)),
                           ])),
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxHeight: (sidebarBounds.maxHeight * .47)
-                              .clamp(24.0, 240.0)
-                              .toDouble(),
-                        ),
-                        child: SingleChildScrollView(
-                            child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                              child: Row(children: [
-                                Expanded(
-                                    child: OutlinedButton.icon(
-                                  onPressed: _savedPlaylists.isEmpty
-                                      ? _addPlaylist
-                                      : _browseSavedPlaylists,
-                                  icon: const Icon(Icons.video_library_outlined,
-                                      size: 17),
-                                  label: Text(
-                                      'Playlists (${_savedPlaylists.length})',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 11)),
-                                )),
-                                const SizedBox(width: 6),
-                                IconButton.outlined(
-                                  tooltip: 'TV guide',
-                                  onPressed: _showTvGuide,
-                                  icon: const Icon(
-                                      Icons.calendar_month_outlined,
-                                      size: 19),
-                                ),
-                                const SizedBox(width: 4),
-                                IconButton.outlined(
-                                  tooltip: 'Recordings',
-                                  onPressed: () => showDialog<void>(
-                                      context: context,
-                                      builder: (_) =>
-                                          RecordingsDialog(onPlay: _select)),
-                                  icon: const Icon(
-                                      Icons.video_collection_outlined,
-                                      size: 19),
-                                ),
-                              ]),
-                            ),
-                            Padding(
+                      if (sidebarBounds.maxHeight >= 300)
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: (sidebarBounds.maxHeight * .47)
+                                .clamp(24.0, 240.0)
+                                .toDouble(),
+                          ),
+                          child: SingleChildScrollView(
+                              child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Padding(
                                 padding:
-                                    const EdgeInsets.symmetric(horizontal: 10),
-                                child: TextField(
-                                  focusNode: _searchFocus,
-                                  controller: _search,
-                                  onChanged: (text) {
-                                    _searchDebounce?.cancel();
-                                    _searchDebounce = Timer(
-                                        const Duration(milliseconds: 140), () {
-                                      if (mounted) {
-                                        setState(() =>
-                                            _query = text.trim().toLowerCase());
-                                      }
-                                    });
-                                  },
-                                  decoration: const InputDecoration(
-                                      prefixIcon: Icon(Icons.search),
-                                      hintText: 'Search channels',
-                                      isDense: true),
-                                )),
-                            Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 5),
+                                    const EdgeInsets.fromLTRB(10, 0, 10, 8),
                                 child: Row(children: [
                                   Expanded(
                                       child: OutlinedButton.icon(
-                                    onPressed: _channels.isEmpty
-                                        ? null
-                                        : _browseCategories,
-                                    icon: const Icon(Icons.category_outlined,
-                                        size: 18),
+                                    onPressed: _savedPlaylists.isEmpty
+                                        ? _addPlaylist
+                                        : _browseSavedPlaylists,
+                                    icon: const Icon(
+                                        Icons.video_library_outlined,
+                                        size: 17),
                                     label: Text(
-                                        _group == ChannelCategories.all
-                                            ? 'All categories (${_channels.length})'
-                                            : '$_group (${ChannelCategories.counts(_channels)[_group] ?? 0})',
+                                        'Playlists (${_savedPlaylists.where((p) => !_hidden(p)).length})',
                                         maxLines: 1,
-                                        overflow: TextOverflow.ellipsis),
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 11)),
                                   )),
-                                  if (_filter == ChannelFilter.recent &&
-                                      _recentHashes.isNotEmpty)
-                                    IconButton(
-                                        tooltip: 'Clear recent history',
-                                        onPressed: _clearRecent,
-                                        icon: const Icon(
-                                            Icons.delete_sweep_outlined)),
-                                ])),
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(10, 0, 10, 5),
-                              child: Row(children: [
-                                for (final option
-                                    in <(ChannelFilter, String, IconData)>[
-                                  (
-                                    ChannelFilter.all,
-                                    'All',
-                                    Icons.grid_view_rounded
+                                  const SizedBox(width: 6),
+                                  IconButton.outlined(
+                                    tooltip: 'TV guide',
+                                    onPressed: _showTvGuide,
+                                    icon: const Icon(
+                                        Icons.calendar_month_outlined,
+                                        size: 19),
                                   ),
-                                  (
-                                    ChannelFilter.favorites,
-                                    'Favorites',
-                                    Icons.star_outline_rounded
+                                  const SizedBox(width: 4),
+                                  IconButton.outlined(
+                                    tooltip: 'Recordings',
+                                    onPressed: () => showDialog<void>(
+                                        context: context,
+                                        builder: (_) =>
+                                            RecordingsDialog(onPlay: (channel) {
+                                              if (_activePlaylistId == null ||
+                                                  _savedPlaylists.any((p) =>
+                                                      p.id ==
+                                                          _activePlaylistId &&
+                                                      _canOpen(p))) {
+                                                _select(channel);
+                                              }
+                                            })),
+                                    icon: const Icon(
+                                        Icons.video_collection_outlined,
+                                        size: 19),
                                   ),
-                                  (
-                                    ChannelFilter.recent,
-                                    'Recent',
-                                    Icons.history_rounded
-                                  ),
-                                ])
-                                  Expanded(
-                                      child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 2),
-                                    child: ChoiceChip(
-                                      showCheckmark: false,
-                                      avatar: Icon(option.$3,
-                                          size: 15,
-                                          color: _filter == option.$1
-                                              ? const Color(0xFF17140B)
-                                              : _gold),
-                                      label: Text(option.$2,
+                                ]),
+                              ),
+                              Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10),
+                                  child: TextField(
+                                    focusNode: _searchFocus,
+                                    controller: _search,
+                                    onChanged: (text) {
+                                      _searchDebounce?.cancel();
+                                      _searchDebounce = Timer(
+                                          const Duration(milliseconds: 140),
+                                          () {
+                                        if (mounted) {
+                                          setState(() => _query =
+                                              text.trim().toLowerCase());
+                                        }
+                                      });
+                                    },
+                                    decoration: const InputDecoration(
+                                        prefixIcon: Icon(Icons.search),
+                                        hintText: 'Search channels',
+                                        isDense: true),
+                                  )),
+                              Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 5),
+                                  child: Row(children: [
+                                    Expanded(
+                                        child: OutlinedButton.icon(
+                                      onPressed: _channels.isEmpty
+                                          ? null
+                                          : _browseCategories,
+                                      icon: const Icon(Icons.category_outlined,
+                                          size: 18),
+                                      label: Text(
+                                          _group == ChannelCategories.all
+                                              ? 'All categories (${_channels.length})'
+                                              : '$_group (${ChannelCategories.counts(_channels)[_group] ?? 0})',
                                           maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(fontSize: 11)),
-                                      selected: _filter == option.$1,
-                                      onSelected: (_) =>
-                                          setState(() => _filter = option.$1),
-                                      visualDensity: VisualDensity.compact,
+                                          overflow: TextOverflow.ellipsis),
+                                    )),
+                                    if (_filter == ChannelFilter.recent &&
+                                        _recentHashes.isNotEmpty)
+                                      IconButton(
+                                          tooltip: 'Clear recent history',
+                                          onPressed: _clearRecent,
+                                          icon: const Icon(
+                                              Icons.delete_sweep_outlined)),
+                                  ])),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(10, 0, 10, 5),
+                                child: Row(children: [
+                                  for (final option
+                                      in <(ChannelFilter, String, IconData)>[
+                                    (
+                                      ChannelFilter.all,
+                                      'All',
+                                      Icons.grid_view_rounded
                                     ),
-                                  )),
-                              ]),
-                            ),
-                          ],
-                        )),
-                      ),
+                                    (
+                                      ChannelFilter.favorites,
+                                      'Favorites',
+                                      Icons.star_outline_rounded
+                                    ),
+                                    (
+                                      ChannelFilter.recent,
+                                      'Recent',
+                                      Icons.history_rounded
+                                    ),
+                                  ])
+                                    Expanded(
+                                        child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 2),
+                                      child: ChoiceChip(
+                                        showCheckmark: false,
+                                        avatar: Icon(option.$3,
+                                            size: 15,
+                                            color: _filter == option.$1
+                                                ? const Color(0xFF17140B)
+                                                : _gold),
+                                        label: Text(option.$2,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style:
+                                                const TextStyle(fontSize: 11)),
+                                        selected: _filter == option.$1,
+                                        onSelected: (_) =>
+                                            setState(() => _filter = option.$1),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    )),
+                                ]),
+                              ),
+                            ],
+                          )),
+                        ),
+                      if (sidebarBounds.maxHeight >= 300)
+                        Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Row(children: [
+                              Expanded(
+                                  child: Text(
+                                      _hideUnavailable
+                                          ? 'Hide confirmed unavailable • Others stay visible'
+                                          : 'Show all channels',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 11,
+                                          color: Colors.white70))),
+                              Switch.adaptive(
+                                key: const Key('hide_unavailable_channels'),
+                                value: _hideUnavailable,
+                                onChanged: (value) =>
+                                    setState(() => _hideUnavailable = value),
+                              ),
+                              IconButton(
+                                tooltip: 'Recheck channels in background',
+                                icon: const Icon(Icons.sync_rounded, size: 20),
+                                onPressed: () {
+                                  _healthScanner.clear();
+                                  _scanCursor = 0;
+                                  _enqueueHealthBatch();
+                                },
+                              ),
+                            ])),
                       Expanded(
                           child: visible.isEmpty
                               ? _channels.isEmpty

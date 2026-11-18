@@ -49,7 +49,7 @@ try {
   }
   $gate = Join-Path $dist 'github-ready-gate.json'
   $token = [guid]::NewGuid().ToString('N')
-  @{ passed=$true; token=$token; version='0.1.2+3'; time=(Get-Date).ToString('o') } |
+  @{ passed=$true; token=$token; version='0.1.3+4'; time=(Get-Date).ToString('o') } |
     ConvertTo-Json | Set-Content -Path $gate -Encoding UTF8
   if ($NoPush) {
     Write-Host 'All automated gates passed; -NoPush selected.' -ForegroundColor Green
@@ -59,7 +59,7 @@ try {
   Write-Host 'Automated gates completed. Manual Cast/codec/TV checks still needed.' -ForegroundColor Yellow
 } catch {
   New-Item -ItemType Directory -Force -Path $failureDir | Out-Null
-  $log = Join-Path $failureDir 'FAILED_FULL_PIPELINE-v0.1.2+3.log'
+  $log = Join-Path $failureDir 'FAILED_FULL_PIPELINE-v0.1.3+4.log'
   @("Stage: $script:stage", "Error: $($_.Exception.Message)", "Stack: $($_.ScriptStackTrace)") | Set-Content -Path $log -Encoding UTF8
   Write-Host "FAILED: $script:stage - $($_.Exception.Message). GitHub push blocked." -ForegroundColor Red
   Write-Host "Diagnostic log: $log" -ForegroundColor Red
