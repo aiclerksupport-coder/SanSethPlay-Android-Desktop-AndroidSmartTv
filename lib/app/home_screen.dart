@@ -13,6 +13,7 @@ import '../core/recent_channel_store.dart';
 import '../core/playlist_repository.dart';
 import '../core/playlist_store.dart';
 import '../core/saved_playlist.dart';
+import '../core/last_watched_store.dart';
 import '../player/player_view.dart';
 import 'mobile_landscape_policy.dart';
 import 'android_immersive_mode.dart';
@@ -22,7 +23,7 @@ import 'recordings_dialog.dart';
 import 'about_dialog.dart';
 
 const _gold = Color(0xFFF4C65B);
-const _panel = Color(0xFF111722);
+const _panel = Color(0xFF0D1C31);
 
 enum ChannelFilter { all, favorites, recent }
 
@@ -51,6 +52,9 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _epgFetching = false;
   bool _epgRefreshQueued = false;
   final PlaylistStore _playlistStore = SecurePlaylistStore();
+  final _lastWatchedStore = LastWatchedStore();
+  LastWatched? _lastWatched;
+  Future<void> _lastWatchedWrite = Future<void>.value();
   List<SavedPlaylist> _savedPlaylists = const [];
   String? _activePlaylistId;
   int _loadGeneration = 0;
@@ -203,7 +207,7 @@ class _HomeScreenState extends State<HomeScreen> {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
-        backgroundColor: _panel,
+        backgroundColor: const Color(0xFF10213A),
         builder: (sheetContext) {
           _channelSheetContext = sheetContext;
           return FractionallySizedBox(
@@ -260,6 +264,14 @@ class _HomeScreenState extends State<HomeScreen> {
     // Do not silently drop the last remote key selection during a throttle.
     setState(() => _selected = channel);
     _recordRecent(channel);
+    final playlistId = _activePlaylistId;
+    if (playlistId != null) {
+      _lastWatched = LastWatched(playlistId, channel);
+      _lastWatchedWrite = _lastWatchedWrite
+          .catchError((Object _) {})
+          .then((_) => _lastWatchedStore.save(playlistId, channel));
+      unawaited(_lastWatchedWrite.catchError((Object _) {}));
+    }
   }
 
   Future<void> _toggleFavorite(StreamChannel channel) async {
@@ -294,9 +306,24 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) {
         return;
       }
-      setState(() => _savedPlaylists = saved);
+      final last = await _lastWatchedStore.load();
+      if (!mounted) {
+        return;
+      }
+      final restored =
+          last != null && saved.any((item) => item.id == last.playlistId)
+              ? last
+              : null;
+      setState(() {
+        _savedPlaylists = saved;
+        _lastWatched = restored;
+      });
       if (saved.isNotEmpty) {
-        await _openPlaylist(saved.first);
+        final match = restored == null
+            ? null
+            : saved.where((p) => p.id == restored.playlistId);
+        await _openPlaylist(
+            match != null && match.isNotEmpty ? match.first : saved.first);
       }
     } catch (_) {
       if (mounted) {
@@ -313,6 +340,22 @@ class _HomeScreenState extends State<HomeScreen> {
           (_) => _playlistStore.save(next),
         );
     await _playlistWrite;
+  }
+
+  // Restore only a channel that still exists in its saved playlist.
+  // Avoid launching stale URL tokens from a deleted/changed source.
+  void _restoreSelectedFrom(List<StreamChannel> channels, String playlistId) {
+    final last = _lastWatched;
+    if (last == null || last.playlistId != playlistId) {
+      return;
+    }
+    for (final item in channels) {
+      if (item.url == last.channel.url) {
+        _selected = item;
+        _lastWatched = null; // one-time startup restoration
+        return;
+      }
+    }
   }
 
   Future<void> _openPlaylist(SavedPlaylist playlist) async {
@@ -335,6 +378,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (mounted && generation == _loadGeneration && cached.isNotEmpty) {
         setState(() {
           _channels = cached;
+          _restoreSelectedFrom(cached, playlist.id);
           _group = 'All groups';
           _filter = ChannelFilter.all;
           _query = '';
@@ -360,6 +404,11 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       setState(() {
         _channels = loaded;
+        if (_selected != null &&
+            !loaded.any((channel) => channel.url == _selected!.url)) {
+          _selected = null;
+        }
+        _restoreSelectedFrom(loaded, playlist.id);
         _group = 'All groups';
         _filter = ChannelFilter.all;
         _query = '';
@@ -738,7 +787,11 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) => AlertDialog(
-          title: const Text('Add Playlist / Live Stream', maxLines: 2),
+          title: const Row(children: [
+            Icon(Icons.playlist_add_rounded, color: _gold),
+            SizedBox(width: 10),
+            Expanded(child: Text('Add Playlist / Live Stream', maxLines: 2)),
+          ]),
           content: SizedBox(
             width: 460,
             child: SingleChildScrollView(
@@ -904,6 +957,12 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       setState(() => _savedPlaylists = next);
       _clearSession();
+      await _lastWatchedWrite.catchError((Object _) {});
+      final remembered = await _lastWatchedStore.load();
+      if (remembered?.playlistId == active) {
+        _lastWatched = null;
+        await _lastWatchedStore.clear();
+      }
       try {
         await _cache.remove(active);
       } catch (_) {/* stale cache only */}
@@ -923,6 +982,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _channels = const [];
       _selected = null;
       _activePlaylistId = null;
+      _busy = false;
       _group = 'All groups';
       _filter = ChannelFilter.all;
       _search.clear();
@@ -941,21 +1001,278 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Lazy, searchable catalog keeps thousands of saved sources out of the
-  /// widget tree until the user opens the source picker.
+  /// Searchable source management. Each row offers Open, Edit and Delete;
+  /// commit to secure storage BEFORE updating visible state.
   Future<void> _browseSavedPlaylists() async {
-    final chosen = await showDialog<SavedPlaylist>(
+    if (_sourceMutationBusy) {
+      return;
+    }
+    var query = '';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) =>
+          StatefulBuilder(builder: (dialogContext, setDialogState) {
+        final filtered = _savedPlaylists
+            .where((item) => item.name.toLowerCase().contains(query))
+            .toList(growable: false);
+        final available = MediaQuery.sizeOf(dialogContext);
+        final keyboard = MediaQuery.viewInsetsOf(dialogContext).bottom;
+        final dialogHeight = (available.height - keyboard - 185.0)
+            .clamp(170.0, 580.0)
+            .toDouble();
+        final dialogWidth =
+            (available.width - 80.0).clamp(180.0, 620.0).toDouble();
+        return AlertDialog(
+          title: Row(children: [
+            const Icon(Icons.video_library_rounded, color: _gold),
+            const SizedBox(width: 12),
+            Expanded(
+                child: Text('Saved playlists (${_savedPlaylists.length})',
+                    maxLines: 1, overflow: TextOverflow.ellipsis)),
+          ]),
+          content: SizedBox(
+              width: dialogWidth,
+              height: dialogHeight,
+              child: Column(children: [
+                TextField(
+                    onChanged: (value) => setDialogState(
+                        () => query = value.trim().toLowerCase()),
+                    decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        hintText: 'Search playlists')),
+                const SizedBox(height: 12),
+                Expanded(
+                    child: ListView.builder(
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) {
+                    final item = filtered[index];
+                    return Card(
+                        margin: const EdgeInsets.only(bottom: 11),
+                        child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Row(children: [
+                              const Padding(
+                                  padding: EdgeInsets.only(left: 12),
+                                  child: Icon(Icons.live_tv_rounded,
+                                      color: _gold)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                  child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(item.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700)),
+                                subtitle: Text(
+                                    item.kind == PlaylistKind.directStream
+                                        ? 'Direct stream'
+                                        : 'M3U playlist'),
+                                onTap: () {
+                                  Navigator.pop(dialogContext);
+                                  unawaited(_openPlaylist(item));
+                                },
+                              )),
+                              PopupMenuButton<String>(
+                                tooltip: 'Edit or delete ${item.name}',
+                                icon: const Icon(Icons.more_vert_rounded,
+                                    color: _gold),
+                                onSelected: (action) async {
+                                  if (_sourceMutationBusy) {
+                                    return;
+                                  }
+                                  if (action == 'edit') {
+                                    await _editSavedPlaylist(item);
+                                  } else if (action == 'delete') {
+                                    await _deleteSavedPlaylist(item);
+                                  }
+                                  if (dialogContext.mounted) {
+                                    setDialogState(() {});
+                                  }
+                                },
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(
+                                      value: 'edit',
+                                      child: Text('Edit name / URL')),
+                                  PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text('Delete playlist')),
+                                ],
+                              ),
+                            ])));
+                  },
+                )),
+              ])),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Close'))
+          ],
+        );
+      }),
+    );
+  }
+
+  Future<void> _editSavedPlaylist(SavedPlaylist item) async {
+    final nameController = TextEditingController(text: item.name);
+    final urlController = TextEditingController(text: item.url.toString());
+    final result = await showDialog<(String, String)>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit playlist'),
+        content: SizedBox(
+            width: 470,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Playlist name'),
+                  maxLength: 100),
+              const SizedBox(height: 12),
+              TextField(
+                  controller: urlController,
+                  decoration: const InputDecoration(labelText: 'Playlist URL'),
+                  maxLines: 2),
+            ])),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(
+                  ctx, (nameController.text.trim(), urlController.text.trim())),
+              child: const Text('Save changes')),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      nameController.dispose();
+      urlController.dispose();
+    });
+    if (result == null || !mounted) {
+      return;
+    }
+    final newName = result.$1;
+    Uri newUrl;
+    try {
+      if (newName.isEmpty) {
+        throw const FormatException();
+      }
+      newUrl = normalizePlaylistUrl(Uri.parse(result.$2));
+      if (_savedPlaylists.any((p) =>
+          p.id != item.id &&
+          playlistSourceKey(p.url) == playlistSourceKey(newUrl))) {
+        throw const FormatException('Same URL already saved.');
+      }
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Valid name/URL daalein; duplicate playlist allowed nahi hai.')));
+      return;
+    }
+    if (_sourceMutationBusy) {
+      return;
+    }
+    _sourceMutationBusy = true;
+    try {
+      final current = _savedPlaylists.where((p) => p.id == item.id);
+      if (current.isEmpty) {
+        return;
+      }
+      final edited = SavedPlaylist(
+          id: item.id, name: newName, url: newUrl, kind: item.kind);
+      final changedUrl =
+          playlistSourceKey(item.url) != playlistSourceKey(newUrl);
+      final next =
+          _savedPlaylists.map((p) => p.id == item.id ? edited : p).toList();
+      await _persistPlaylists(next);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _savedPlaylists = next;
+      });
+      if (changedUrl) {
+        ++_loadGeneration; // invalidate any obsolete download
+        try {
+          await _cache.remove(item.id);
+        } catch (_) {/* cache best effort */}
+        await _lastWatchedWrite.catchError((Object _) {});
+        final remembered = await _lastWatchedStore.load();
+        if (remembered?.playlistId == item.id) {
+          _lastWatched = null;
+          await _lastWatchedStore.clear();
+        }
+        if (_activePlaylistId == item.id) {
+          _clearSession();
+          await _openPlaylist(edited);
+        }
+      } else if (_activePlaylistId == item.id &&
+          item.kind == PlaylistKind.directStream) {
+        final renamed = _repository.directChannel(newUrl, name: newName);
+        setState(() {
+          _channels = [renamed];
+          if (_selected?.url == renamed.url) {
+            _selected = renamed;
+          }
+          _message = 'Playlist renamed';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _message = 'Playlist update save nahi hua.');
+      }
+    } finally {
+      _sourceMutationBusy = false;
+    }
+  }
+
+  Future<void> _deleteSavedPlaylist(SavedPlaylist item) async {
+    final approved = await showDialog<bool>(
         context: context,
-        builder: (context) => _SearchableChoiceDialog<SavedPlaylist>(
-              title: 'Saved playlists (${_savedPlaylists.length})',
-              items: _savedPlaylists,
-              label: (item) => item.name,
-              detail: (item) => item.kind == PlaylistKind.directStream
-                  ? 'Direct stream'
-                  : 'M3U playlist',
+        builder: (ctx) => AlertDialog(
+              title: const Text('Delete playlist?'),
+              content:
+                  Text('"${item.name}" saved list se remove hogi. Continue?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Delete')),
+              ],
             ));
-    if (chosen != null && mounted && !_busy) {
-      await _openPlaylist(chosen);
+    if (approved != true || !mounted || _sourceMutationBusy) {
+      return;
+    }
+    _sourceMutationBusy = true;
+    try {
+      final next = _savedPlaylists.where((p) => p.id != item.id).toList();
+      await _persistPlaylists(next);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _savedPlaylists = next);
+      await _lastWatchedWrite.catchError((Object _) {});
+      final remembered = await _lastWatchedStore.load();
+      if (remembered?.playlistId == item.id) {
+        _lastWatched = null;
+        await _lastWatchedStore.clear();
+      }
+      try {
+        await _cache.remove(item.id);
+      } catch (_) {/* noncritical */}
+      if (_activePlaylistId == item.id) {
+        _clearSession();
+        if (next.isNotEmpty) {
+          await _openPlaylist(next.first);
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _message = 'Playlist delete nahi hui.');
+      }
+    } finally {
+      _sourceMutationBusy = false;
     }
   }
 
@@ -1060,11 +1377,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   backgroundColor: Theme.of(context).scaffoldBackgroundColor,
                   surfaceTintColor: Colors.transparent,
                   titleSpacing: 12,
-                  title: Image.asset(
-                      'assets/branding/app_icon_header_transparent.png',
-                      height: 52,
-                      width: 52,
-                      semanticLabel: 'SanSeth Play'),
+                  title: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Image.asset(
+                        'assets/branding/app_icon_header_transparent.png',
+                        height: 49,
+                        width: 49,
+                        semanticLabel: 'SanSeth Play'),
+                    if (size.width >= 390)
+                      const Flexible(
+                          child: Padding(
+                        padding: EdgeInsets.only(left: 7),
+                        child: Text('SanSeth Play',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontWeight: FontWeight.w800, fontSize: 17)),
+                      )),
+                  ]),
                   actions: [
                     if (_savedPlaylists.isNotEmpty)
                       IconButton(
@@ -1074,6 +1403,13 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                     PopupMenuButton<String>(
                       tooltip: 'More options',
+                      constraints: BoxConstraints(
+                        minWidth: (size.width * .68).clamp(240.0, 330.0),
+                        maxWidth: (size.width * .86).clamp(260.0, 380.0),
+                        maxHeight: size.height * .82,
+                      ),
+                      offset: const Offset(-22, 10),
+                      iconColor: _gold,
                       icon: const Icon(Icons.more_horiz_rounded),
                       onSelected: (value) {
                         if (value == 'provider') {
@@ -1117,39 +1453,227 @@ class _HomeScreenState extends State<HomeScreen> {
                         }
                       },
                       itemBuilder: (context) => [
+                        const PopupMenuItem<String>(
+                            enabled: false,
+                            height: 40,
+                            child: Text('PLAYLIST & CONTENT',
+                                style: TextStyle(
+                                    color: _gold,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 2))),
                         if (_savedPlaylists.isNotEmpty)
                           const PopupMenuItem(
-                              value: 'saved', child: Text('My playlists')),
+                              value: 'saved',
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.video_library_outlined,
+                                    color: _gold, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('My playlists',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
                         const PopupMenuItem(
                             value: 'provider',
-                            child: Text('Xtream provider (optional)')),
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.dns_outlined, color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('Xtream provider (optional)',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Icon(Icons.chevron_right_rounded,
+                                  size: 19, color: _gold)
+                            ])),
                         const PopupMenuItem(
-                            value: 'recordings', child: Text('My recordings')),
+                            value: 'recordings',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.videocam_outlined,
+                                  color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('My recordings',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Icon(Icons.chevron_right_rounded,
+                                  size: 19, color: _gold)
+                            ])),
                         const PopupMenuItem(
-                            value: 'guide', child: Text('TV guide')),
+                            value: 'guide',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.live_tv_outlined,
+                                  color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('TV guide',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Icon(Icons.chevron_right_rounded,
+                                  size: 19, color: _gold)
+                            ])),
+                        const PopupMenuItem<String>(
+                            enabled: false,
+                            height: 38,
+                            child: Text('HELP & INFO',
+                                style: TextStyle(
+                                    color: _gold,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 2))),
                         const PopupMenuItem(
-                            value: 'help', child: Text('How to use')),
+                            value: 'help',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.help_outline_rounded,
+                                  color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('How to use',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Icon(Icons.chevron_right_rounded,
+                                  size: 19, color: _gold)
+                            ])),
                         const PopupMenuItem(
-                            value: 'about', child: Text('About / Version')),
+                            value: 'about',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.info_outline_rounded,
+                                  color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('About / Version',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Icon(Icons.chevron_right_rounded,
+                                  size: 19, color: _gold)
+                            ])),
+                        const PopupMenuItem<String>(
+                            enabled: false,
+                            height: 38,
+                            child: Text('TOOLS',
+                                style: TextStyle(
+                                    color: _gold,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 2))),
                         const PopupMenuItem(
-                            value: 'epg', child: Text('Load XMLTV URL')),
+                            value: 'epg',
+                            height: 58,
+                            child: Row(children: [
+                              Icon(Icons.link_rounded, color: _gold, size: 23),
+                              SizedBox(width: 14),
+                              Expanded(
+                                  child: Text('Load XMLTV URL',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.w600))),
+                              Icon(Icons.chevron_right_rounded,
+                                  size: 19, color: _gold)
+                            ])),
                         if (size.width >= 600)
                           const PopupMenuItem(
-                              value: 'tv', child: Text('TV layout preview')),
+                              value: 'tv',
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.tv_rounded, color: _gold, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('TV layout preview',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
                         if (_recentHashes.isNotEmpty)
                           const PopupMenuItem(
                               value: 'clear-recent',
-                              child: Text('Clear recent history')),
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.history_rounded,
+                                    color: _gold, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('Clear recent history',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
                         if (_epgSource != null)
                           const PopupMenuItem(
                               value: 'epg-refresh',
-                              child: Text('Refresh TV guide')),
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.refresh_rounded,
+                                    color: _gold, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('Refresh TV guide',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
                         if (_activePlaylistId != null) ...[
                           const PopupMenuItem(
                               value: 'refresh',
-                              child: Text('Refresh playlist')),
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.sync_rounded,
+                                    color: _gold, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('Refresh playlist',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
                           const PopupMenuItem(
-                              value: 'remove', child: Text('Remove playlist')),
+                              value: 'remove',
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.delete_outline_rounded,
+                                    color: Colors.redAccent, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('Remove playlist',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
                         ],
                       ],
                     ),
@@ -1174,7 +1698,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
           bottomNavigationBar: !mobileLandscape && size.width < 700
               ? NavigationBar(
-                  height: 66,
+                  height: 74,
                   backgroundColor: Theme.of(context).scaffoldBackgroundColor,
                   indicatorColor: _gold.withValues(alpha: .16),
                   selectedIndex: _navIndex,
@@ -1255,8 +1779,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                 : bounds.maxHeight -
                                     pad -
                                     portraitPlayerHeight)),
-                    child:
-                        _content(tv, immersive: mobileLandscape, compact: mini),
+                    // Very short landscape windows cannot fit the full player caption
+                    // beneath the video. Keep the video visible and omit only
+                    // secondary caption rows; this is a real layout fix rather
+                    // than loosening the responsive overflow test.
+                    child: _content(
+                      tv,
+                      immersive: mobileLandscape,
+                      compact: mini ||
+                          (!mobileLandscape &&
+                              bounds.maxHeight < 330 &&
+                              bounds.maxWidth > bounds.maxHeight),
+                    ),
                   ),
                 if (mini)
                   Positioned(
@@ -1271,7 +1805,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           tooltip: 'Restore player',
                           icon:
                               const Icon(Icons.open_in_full_rounded, size: 19),
-                          onPressed: () => setState(() => _miniPlayer = false),
+                          onPressed: () => setState(() {
+                            _miniPlayer = false;
+                            _navIndex = 0;
+                          }),
                         ),
                         IconButton(
                           key: const Key('close_mini_player'),
@@ -1279,6 +1816,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           icon: const Icon(Icons.close_rounded, size: 19),
                           onPressed: () => setState(() {
                             _miniPlayer = false;
+                            _navIndex = 0;
                             _selected = null;
                             _multiviewSecondary = null;
                           }),
@@ -1382,54 +1920,62 @@ class _HomeScreenState extends State<HomeScreen> {
                           : 16 / 9,
                       child: Container(
                         decoration: BoxDecoration(
-                            color: Colors.black,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(color: Colors.white12)),
+                            color: const Color(0xFF020810),
+                            borderRadius: BorderRadius.circular(22),
+                            border: Border.all(
+                                color: const Color(0xFFB78E3C), width: 1.2)),
                         clipBehavior: Clip.antiAlias,
                         child: _selected == null
                             ? Center(
-                                child: Padding(
-                                    padding: const EdgeInsets.all(10),
-                                    child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.smart_display_rounded,
-                                              size: tv ? 75 : 42, color: _gold),
-                                          const SizedBox(height: 5),
-                                          const Text(
-                                              'Your entertainment starts here',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                  fontWeight: FontWeight.w800)),
-                                          const Text(
-                                              'Import your authorized playlist',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                  fontSize: 11,
-                                                  color: Colors.white54)),
-                                        ])))
+                                child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Padding(
+                                        padding: const EdgeInsets.all(10),
+                                        child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.smart_display_rounded,
+                                                  size: tv ? 75 : 42,
+                                                  color: _gold),
+                                              const SizedBox(height: 5),
+                                              const Text(
+                                                  'Your entertainment starts here',
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  textAlign: TextAlign.center,
+                                                  style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.w800)),
+                                              const Text(
+                                                  'Import your authorized playlist',
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: Colors.white54)),
+                                            ]))))
                             : _multiviewSecondary != null
                                 ? Row(children: [
                                     Expanded(
                                         child: PlayerView(
-                                            key: ValueKey(
-                                                'primary-${_selected!.url}'),
+                                            key: const ValueKey(
+                                                'sanseth-multiview-primary'),
                                             channel: _selected!)),
                                     const VerticalDivider(
                                         width: 3, color: Color(0xFFF4C65B)),
                                     Expanded(
                                         child: PlayerView(
-                                            key: ValueKey(
-                                                'secondary-${_multiviewSecondary!.url}'),
+                                            key: const ValueKey(
+                                                'sanseth-multiview-secondary'),
                                             channel: _multiviewSecondary!,
                                             initialVolume: 0,
                                             enableSystemMediaSession: false)),
                                   ])
                                 : PlayerView(
-                                    key: ValueKey(_selected!.url),
+                                    key: const ValueKey(
+                                        'sanseth-primary-player'),
                                     channel: _selected!,
                                     compact: compact,
                                     onControlsInteraction:
@@ -1482,7 +2028,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                              fontSize: tv ? 26 : 18,
+                              fontSize: tv ? 28 : 20,
                               fontWeight: FontWeight.w800))),
                   if (_selected != null &&
                       _multiviewSecondary == null &&
@@ -1490,7 +2036,10 @@ class _HomeScreenState extends State<HomeScreen> {
                     IconButton(
                         key: const Key('minimize_player'),
                         tooltip: 'Minimize player and browse channels',
-                        onPressed: () => setState(() => _miniPlayer = true),
+                        onPressed: () => setState(() {
+                              _miniPlayer = true;
+                              _navIndex = 2;
+                            }),
                         icon: const Icon(Icons.picture_in_picture_alt_rounded,
                             color: _gold)),
                   if (_selected != null)
@@ -1573,8 +2122,8 @@ class _HomeScreenState extends State<HomeScreen> {
       Container(
         decoration: BoxDecoration(
             color: _panel,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white10)),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: const Color(0xFF31547D))),
         child: LayoutBuilder(
             builder: (context, sidebarBounds) => Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1786,7 +2335,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   padding:
                                       EdgeInsets.only(bottom: mini ? 175 : 0),
                                   itemCount: visible.length,
-                                  itemExtent: tv ? 80 : 64,
+                                  itemExtent: tv ? 88 : 76,
                                   itemBuilder: (context, index) {
                                     final channel = visible[index];
                                     final selected =
@@ -1798,10 +2347,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                             horizontal: 6, vertical: 3),
                                         child: Material(
                                           color: selected
-                                              ? _gold.withValues(alpha: .15)
-                                              : Colors.transparent,
+                                              ? _gold.withValues(alpha: .13)
+                                              : const Color(0xFF102139),
                                           borderRadius:
-                                              BorderRadius.circular(14),
+                                              BorderRadius.circular(18),
                                           child: Row(children: [
                                             Expanded(
                                                 child: Focus(
@@ -1837,9 +2386,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                                     child: ListTile(
                                                       contentPadding:
                                                           const EdgeInsets.only(
-                                                              left: 10,
-                                                              right: 2),
-                                                      dense: true,
+                                                              left: 14,
+                                                              right: 3),
+                                                      dense: false,
                                                       leading: Icon(
                                                           Icons.live_tv_rounded,
                                                           size: tv ? 27 : 23,
@@ -1852,10 +2401,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                                               .ellipsis,
                                                           style: TextStyle(
                                                               fontSize:
-                                                                  tv ? 18 : 14,
+                                                                  tv ? 19 : 15,
                                                               fontWeight:
                                                                   FontWeight
-                                                                      .w600)),
+                                                                      .w700)),
                                                       subtitle: Text(
                                                           _currentProgram(
                                                                       channel)
@@ -1866,8 +2415,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                                               .ellipsis,
                                                           style: const TextStyle(
                                                               color: Colors
-                                                                  .white54,
-                                                              fontSize: 11)),
+                                                                  .white70,
+                                                              fontSize: 12)),
                                                       onTap: () =>
                                                           _select(channel),
                                                     ));

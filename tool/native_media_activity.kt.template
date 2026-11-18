@@ -25,6 +25,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterFragmentActivity() {
     private var mediaSession: MediaSession? = null
+    private var playbackActiveForPip = false
     private var mediaChannel: MethodChannel? = null
     private var pipChannel: MethodChannel? = null
     private var storageChannel: MethodChannel? = null
@@ -156,6 +157,7 @@ class MainActivity : FlutterFragmentActivity() {
                 when (call.method) {
                     "update" -> {
                         val playing = call.argument<Boolean>("playing") ?: false
+                        playbackActiveForPip = playing
                         val title = call.argument<String>("title") ?: "SanSeth Play"
                         val live = call.argument<Boolean>("live") ?: true
                         val durationMs = call.argument<Number>("durationMs")?.toLong() ?: 0L
@@ -178,6 +180,7 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(true)
                     }
                     "deactivate" -> {
+                        playbackActiveForPip = false
                         mediaSession?.isActive = false
                         result.success(true)
                     }
@@ -210,6 +213,17 @@ class MainActivity : FlutterFragmentActivity() {
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             }
         }
+    }
+
+    // Android Home/app switch: video can remain visible in a PiP window on
+    // supported devices. Never try to enter PiP when playback was stopped.
+    override fun onUserLeaveHint() {
+        if (playbackActiveForPip && pipAvailable() && !isFinishing) {
+            try {
+                enterPictureInPictureMode(PictureInPictureParams.Builder().build())
+            } catch (_: Exception) { /* OS or device can refuse PiP */ }
+        }
+        super.onUserLeaveHint()
     }
 
     override fun onDestroy() {

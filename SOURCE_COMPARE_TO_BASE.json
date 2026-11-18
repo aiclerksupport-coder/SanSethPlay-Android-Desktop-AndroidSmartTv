@@ -1,0 +1,54 @@
+{
+  "project": "SanSeth Play",
+  "version": "0.1.0+1",
+  "baseline": "SanSeth-Play-v0.1.0-WINDOWS-PREFLIGHT-LANDSCAPE-PLAYER-CONTROLS-FIX-SOURCE.zip",
+  "baseline_sha256": "cdd97cfd20e2cf33ae5cf5e238cf1ba9a448b2fc0b2b9528f621c7436fccae39",
+  "base_file_count": 189,
+  "candidate_file_count": 198,
+  "changed_files": [
+    {
+      "path": "lib/app/home_screen.dart",
+      "before_sha256": "4db394217897e67ec6a33cba05bfd243e19593f472e8d9d8a5dd5f7473e0fc48",
+      "after_sha256": "145c9c99b80ed49486a0e198a57e0e602683702af632d8c1179eae7963826d06"
+    },
+    {
+      "path": "lib/app/sanseth_app.dart",
+      "before_sha256": "a01852ef2246b8a8461767737af677e6c997ae41fc83aa7be863a4b93483d7e4",
+      "after_sha256": "0c3570f4a871b2cd7d0e5335a56e697344bf8c3ddbd22c527c164b8d557f0030"
+    },
+    {
+      "path": "lib/player/player_view.dart",
+      "before_sha256": "ed60593e46f473ee055910bec37d509b80435dc83e2faf1da9add609e1aefd61",
+      "after_sha256": "c461eaa09e97385f15f9fc3c0545dc5e7cf3abb699fba52c47a46cef103f2997"
+    },
+    {
+      "path": "tool/native_media_activity.kt.template",
+      "before_sha256": "0181b8a9ba3f7e267f0a43e2bd6179ca20f05fb32ae080a873dd252c77ac71e4",
+      "after_sha256": "862fee39a6ae1bc7d420f0f53b16f8fc3be68d88a9ca1c16d446f5b2c5e319ee"
+    }
+  ],
+  "added_files": [
+    "SANSETH_CHANGELOG_CANDIDATE.md",
+    "SOURCE_COMPARE_TO_BASE.json",
+    "VULNERABILITY_FLAW_REAL_WORLD_FIX_REPORT.md",
+    "docs/approved_ui_concepts/01_saved_playlists.png",
+    "docs/approved_ui_concepts/02_more_menu.png",
+    "docs/approved_ui_concepts/03_home.png",
+    "docs/approved_ui_concepts/04_live_player.png",
+    "docs/approved_ui_concepts/README.md",
+    "lib/core/last_watched_store.dart"
+  ],
+  "removed_files": [],
+  "validation": {
+    "byte_compare": "PASS",
+    "source_no_removal": "PASS",
+    "dart_bracket_scan": "PASS",
+    "flutter_analyze": "NOT_RUN_SDK_UNAVAILABLE",
+    "flutter_tests": "NOT_RUN_SDK_UNAVAILABLE",
+    "android_mobile_build": "NOT_RUN_SDK_UNAVAILABLE",
+    "android_tv_build": "NOT_RUN_SDK_UNAVAILABLE",
+    "windows_build": "NOT_RUN_SDK_UNAVAILABLE",
+    "device_playback": "NOT_RUN_DEVICES_UNAVAILABLE"
+  },
+  "github_push": "NOT_DONE"
+}

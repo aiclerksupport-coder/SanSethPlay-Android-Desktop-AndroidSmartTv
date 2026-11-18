@@ -74,7 +74,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   bool _loading = true;
   bool _opening = false;
   final LatestChannelRequest _channelRequests = LatestChannelRequest();
-  bool _resumeAfterForeground = false;
   late final AndroidMediaSession _mediaSession;
   late final WindowsMediaSession _windowsMediaSession;
   Timer? _mediaSync;
@@ -146,11 +145,11 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   // decoder are never recreated when the overlay appears or disappears.
   void _scheduleOverlayHide() {
     _overlayHideTimer?.cancel();
-    if (!_phoneLandscape || widget.compact) {
+    if (widget.compact) {
       return;
     }
     _overlayHideTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted && _phoneLandscape && !widget.compact) {
+      if (mounted && !widget.compact && _overlayVisible) {
         setState(() => _overlayVisible = false);
       }
     });
@@ -178,14 +177,14 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       _phoneLandscape = phoneLandscape;
       _overlayVisible = true;
       _overlayHideTimer?.cancel();
-      if (phoneLandscape) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && _phoneLandscape) {
-            _scheduleOverlayHide();
-          }
-        });
-      }
     }
+    // The home portrait player, Android TV, and Windows custom overlays use
+    // the same inactivity timeout as the phone landscape player.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _scheduleOverlayHide();
+      }
+    });
   }
 
   Future<void> _toggleManualFullscreen() async {
@@ -226,7 +225,9 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       _mediaSession.attach();
       unawaited(_windowsMediaSession.attach());
     }
-    _player = Player();
+    // Moderate demuxer memory; do not increase startup latency with a huge cache.
+    _player = Player(
+        configuration: const PlayerConfiguration(bufferSize: 12 * 1024 * 1024));
     _volume = widget.initialVolume.clamp(0.0, 100.0);
     _muted = _volume == 0;
     if (_volume != 100) {
@@ -377,6 +378,30 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   // Latest-request-wins: while the decoder opens a stream, retain the newest
   // channel URL and open it after the current async operation completes.
   // Never drop a channel selection simply because a prior open is in-flight.
+  bool _liveCacheConfigured = false;
+
+  Future<void> _tuneLiveStartup() async {
+    if (_liveCacheConfigured || widget.channel.isVod) return;
+    _liveCacheConfigured = true;
+    // Native libmpv options are best-effort: media-kit backend may differ.
+    // Avoid cache-pause-initial so the first frame needn't wait for a large
+    // prefetch; retain a short rebuffer safety window for unstable networks.
+    final backend = _player.platform;
+    if (backend is NativePlayer) {
+      for (final entry in <(String, String)>[
+        ('cache-pause-initial', 'no'),
+        ('cache-pause-wait', '0.6'),
+        ('cache-secs', '4'),
+      ]) {
+        try {
+          await backend.setProperty(entry.$1, entry.$2);
+        } catch (_) {
+          // Older libmpv versions can reject an option. Default remains safe.
+        }
+      }
+    }
+  }
+
   Future<void> _open() async {
     _channelRequests.request(widget.channel.url.toString());
     if (_opening) {
@@ -403,6 +428,8 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
           _position = Duration.zero;
         });
         try {
+          await _tuneLiveStartup();
+          if (!mounted || generation != _generation) return;
           await _player.open(Media(url));
           _scheduleMediaSync();
           // Some IPTV URLs never emit a decoder error even when no frames
@@ -448,23 +475,11 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.hidden) {
-      // Background video playback is not advertised as supported yet. Avoid
-      // surprise audio playback when user switches applications.
-      if (_playing && !_inPictureInPicture) {
-        _resumeAfterForeground = true;
-        unawaited(_player.pause());
-      }
-    } else if (state == AppLifecycleState.resumed) {
+    // Switching to another application is NOT an explicit Stop or Exit.
+    // Keep media_kit playback alive; on Android, actual video visibility while
+    // backgrounded depends on PiP / OS restrictions and device policy.
+    if (state == AppLifecycleState.resumed && _inPictureInPicture) {
       _inPictureInPicture = false;
-      if (_resumeAfterForeground) {
-        _resumeAfterForeground = false;
-        if (mounted) {
-          unawaited(_player.play());
-        }
-      }
     }
   }
 
@@ -1079,18 +1094,183 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
     }
   }
 
+  // Recording is intentionally limited to supported MPEG-TS sources. Android
+  // microphone capture / MediaProjection audio mixing and transcoding are NOT
+  // provided by the transport-stream recorder, so never silently claim them.
+  Future<void> _showRecordingOptions() async {
+    if (_recording) {
+      await _toggleRecording();
+      return;
+    }
+    final supported = DirectTsRecorder.supports(widget.channel.url) ||
+        HlsTsRecorder.supports(widget.channel.url);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(
+              left: 18,
+              right: 18,
+              bottom: MediaQuery.viewInsetsOf(sheetContext).bottom + 20),
+          child: SingleChildScrollView(
+              child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                const Icon(Icons.fiber_manual_record_rounded,
+                    color: Color(0xFFF4C65B)),
+                const SizedBox(width: 12),
+                const Expanded(
+                    child: Text('Record Stream',
+                        style: TextStyle(
+                            fontSize: 22, fontWeight: FontWeight.w800))),
+                IconButton(
+                    tooltip: 'Close recording options',
+                    onPressed: () => Navigator.pop(sheetContext),
+                    icon: const Icon(Icons.close_rounded)),
+              ]),
+              const SizedBox(height: 7),
+              const Text('Record the currently playing live TV stream.',
+                  style: TextStyle(color: Colors.white70)),
+              const SizedBox(height: 20),
+              const Text('AUDIO SOURCE',
+                  style: TextStyle(
+                      color: Color(0xFFF4C65B),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.5)),
+              const SizedBox(height: 9),
+              const Card(
+                  child: ListTile(
+                leading:
+                    Icon(Icons.volume_up_rounded, color: Color(0xFFF4C65B)),
+                title: Text('System / channel audio'),
+                subtitle: Text(
+                    'Original video and channel sound, if provided by source'),
+                trailing:
+                    Icon(Icons.check_circle_rounded, color: Color(0xFFF4C65B)),
+              )),
+              const Card(
+                  child: ListTile(
+                enabled: false,
+                leading: Icon(Icons.mic_none_rounded),
+                title: Text('Mic / outer voice'),
+                subtitle: Text(
+                    'Requires microphone capture and a separate encoder; not yet supported'),
+              )),
+              const Card(
+                  child: ListTile(
+                enabled: false,
+                leading: Icon(Icons.mic_rounded),
+                title: Text('System + Mic'),
+                subtitle: Text('Audio mixing is not available in this build'),
+              )),
+              const SizedBox(height: 14),
+              const Text('RECORDING OPTIONS',
+                  style: TextStyle(
+                      color: Color(0xFFF4C65B),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.5)),
+              const SizedBox(height: 8),
+              const Card(
+                  child: ListTile(
+                leading:
+                    Icon(Icons.high_quality_rounded, color: Color(0xFFF4C65B)),
+                title: Text('Video quality'),
+                subtitle: Text('Original stream quality (no re-encoding)'),
+              )),
+              const Card(
+                  child: ListTile(
+                leading: Icon(Icons.movie_creation_outlined,
+                    color: Color(0xFFF4C65B)),
+                title: Text('Output format'),
+                subtitle: Text('MPEG transport stream (.ts)'),
+              )),
+              const Card(
+                  child: ListTile(
+                leading:
+                    Icon(Icons.folder_open_rounded, color: Color(0xFFF4C65B)),
+                title: Text('Save location'),
+                subtitle:
+                    Text('SanSeth Play app documents; export after recording'),
+              )),
+              const SizedBox(height: 10),
+              Text(
+                  supported
+                      ? 'The current channel keeps playing while the source is recorded.'
+                      : 'This source does not support direct TS / compatible HLS recording.',
+                  style: TextStyle(
+                      color: supported
+                          ? const Color(0xFFF4C65B)
+                          : Colors.orangeAccent)),
+              const SizedBox(height: 17),
+              Row(children: [
+                Expanded(
+                    child: OutlinedButton(
+                        onPressed: () => Navigator.pop(sheetContext),
+                        child: const Text('Cancel'))),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: FilledButton.icon(
+                        onPressed: supported
+                            ? () {
+                                Navigator.pop(sheetContext);
+                                unawaited(_toggleRecording());
+                              }
+                            : null,
+                        icon: const Icon(Icons.fiber_manual_record_rounded),
+                        label: const Text('Start recording',
+                            maxLines: 1, overflow: TextOverflow.ellipsis))),
+              ]),
+            ],
+          )),
+        ),
+      ),
+    );
+  }
+
   Future<void> _settings() async {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF111722),
-      builder: (sheetContext) => SafeArea(
-        child: StatefulBuilder(builder: (ctx, update) {
-          Widget control(String text, IconData icon, VoidCallback? onPressed) =>
-              OutlinedButton.icon(
-                onPressed: onPressed,
-                icon: Icon(icon, size: 18),
-                label: Text(text, maxLines: 1, overflow: TextOverflow.ellipsis),
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(child: StatefulBuilder(
+        builder: (ctx, update) {
+          Widget action(String label, IconData icon, VoidCallback? onTap) =>
+              SizedBox(
+                  height: 54,
+                  child: OutlinedButton.icon(
+                    onPressed: onTap,
+                    icon: Icon(icon, size: 22, color: const Color(0xFFF4C65B)),
+                    label: Text(label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center),
+                    style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Color(0xFFC9A25C)),
+                        shape: const StadiumBorder()),
+                  ));
+          Widget paired(Widget first, Widget second) => Row(children: [
+                Expanded(child: first),
+                const SizedBox(width: 10),
+                Expanded(child: second),
+              ]);
+          Widget section(String title, IconData icon) => Padding(
+                padding: const EdgeInsets.only(top: 19, bottom: 10),
+                child: Row(children: [
+                  Icon(icon, color: const Color(0xFFF4C65B), size: 21),
+                  const SizedBox(width: 9),
+                  Flexible(
+                      child: Text(title,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 17))),
+                  const SizedBox(width: 12),
+                  const Expanded(child: Divider()),
+                ]),
               );
           Future<void> apply(Future<void> Function() operation) async {
             await operation();
@@ -1101,84 +1281,80 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
 
           return ConstrainedBox(
             constraints:
-                BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * .82),
+                BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * .9),
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              padding: const EdgeInsets.fromLTRB(18, 4, 18, 22),
               child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Row(children: [
+                      const Icon(Icons.play_circle_outline_rounded,
+                          size: 27, color: Color(0xFFF4C65B)),
+                      const SizedBox(width: 12),
                       const Expanded(
-                          child: Text('Player controls',
+                          child: Text('Player Controls',
                               style: TextStyle(
-                                  fontSize: 19, fontWeight: FontWeight.bold),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis)),
+                                  fontSize: 23, fontWeight: FontWeight.w800))),
                       IconButton(
                           tooltip: 'Close',
-                          onPressed: () => Navigator.pop(ctx),
-                          icon: const Icon(Icons.close)),
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () => Navigator.pop(ctx)),
                     ]),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, runSpacing: 5, children: [
-                      control(
-                          'Previous', Icons.skip_previous, widget.onPrevious),
-                      control(
-                          _playing ? 'Pause' : 'Play',
-                          _playing ? Icons.pause : Icons.play_arrow,
-                          () => apply(_player.playOrPause)),
-                      control('Next', Icons.skip_next, widget.onNext),
-                      control(
-                          'Replay stream', Icons.replay, () => apply(_open)),
-                      if (DirectTsRecorder.supports(widget.channel.url) ||
-                          HlsTsRecorder.supports(widget.channel.url))
-                        control(
+                    section('Quick controls', Icons.bolt_rounded),
+                    paired(
+                        action('Previous', Icons.skip_previous_rounded,
+                            widget.onPrevious),
+                        action(
+                            _playing ? 'Pause' : 'Play',
+                            _playing
+                                ? Icons.pause_rounded
+                                : Icons.play_arrow_rounded,
+                            () => apply(_player.playOrPause))),
+                    const SizedBox(height: 9),
+                    paired(
+                        action('Next', Icons.skip_next_rounded, widget.onNext),
+                        action('Replay stream', Icons.replay_rounded,
+                            () => apply(_open))),
+                    section('Live tools', Icons.settings_input_antenna_rounded),
+                    paired(
+                        action(
                             _recording ? 'Stop recording' : 'Record stream',
                             _recording
-                                ? Icons.stop_circle
-                                : Icons.fiber_manual_record,
-                            _toggleRecording),
-                      if (widget.enableSystemMediaSession &&
-                          HlsTimeshift.supports(widget.channel.url))
-                        control(
+                                ? Icons.stop_circle_outlined
+                                : Icons.fiber_manual_record_rounded, () {
+                          unawaited(_showRecordingOptions());
+                        }),
+                        action(
                             _timeshift != null
                                 ? 'Go Live'
                                 : (_timeshiftStarting
                                     ? 'Starting DVR...'
                                     : 'Start Timeshift'),
-                            _timeshift != null
-                                ? Icons.live_tv
-                                : Icons.history_toggle_off,
-                            _timeshiftStarting ? null : _toggleTimeshift),
-                      if (Platform.isAndroid &&
-                          AndroidCast.isPublicCastUri(widget.channel.url))
-                        control('Cast to TV', Icons.cast, _castCurrent),
-                      if (Platform.isAndroid)
-                        control(
+                            Icons.history_toggle_off_rounded,
+                            widget.enableSystemMediaSession &&
+                                    HlsTimeshift.supports(widget.channel.url) &&
+                                    !_timeshiftStarting
+                                ? () => apply(_toggleTimeshift)
+                                : null)),
+                    const SizedBox(height: 9),
+                    paired(
+                        action(
+                            'Cast to TV',
+                            Icons.cast_rounded,
+                            Platform.isAndroid &&
+                                    AndroidCast.isPublicCastUri(
+                                        widget.channel.url)
+                                ? _castCurrent
+                                : null),
+                        action(
                             'Picture-in-Picture',
-                            Icons.picture_in_picture_alt,
-                            _enterPictureInPicture),
-                      control('-10 sec', Icons.replay_10,
-                          _canSeek ? () => apply(() => _seekBy(-10)) : null),
-                      control('+10 sec', Icons.forward_10,
-                          _canSeek ? () => apply(() => _seekBy(10)) : null),
-                      control(
-                          'Rotate lock ${_orientationLocked ? 'ON' : 'OFF'}',
-                          _orientationLocked
-                              ? Icons.screen_lock_rotation
-                              : Icons.screen_rotation,
-                          _canRotate ? () => apply(_setOrientationLock) : null),
-                    ]),
-                    const SizedBox(height: 8),
-                    const Text(
-                        'Fullscreen: video ke built-in fullscreen button ya F key use karein.',
-                        style: TextStyle(fontSize: 12, color: Colors.white70)),
-                    const SizedBox(height: 14),
-                    const Text('Video size / aspect',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, children: [
+                            Icons.picture_in_picture_alt_rounded,
+                            Platform.isAndroid
+                                ? _enterPictureInPicture
+                                : null)),
+                    section('Video size / aspect', Icons.aspect_ratio_rounded),
+                    Wrap(spacing: 7, runSpacing: 7, children: [
                       for (final entry in <(String, BoxFit)>[
                         ('Fit', BoxFit.contain),
                         ('Crop', BoxFit.cover),
@@ -1186,58 +1362,57 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                         ('Original', BoxFit.none),
                       ])
                         ChoiceChip(
-                            label: Text(entry.$1),
-                            selected: _fit == entry.$2,
-                            onSelected: (_) {
-                              setState(() => _fit = entry.$2);
-                              update(() {});
-                            }),
+                          label: Text(entry.$1),
+                          selected: _fit == entry.$2,
+                          onSelected: (_) {
+                            setState(() => _fit = entry.$2);
+                            update(() {});
+                          },
+                        ),
                     ]),
-                    const SizedBox(height: 14),
-                    const Text('Languages and captions',
-                        style: TextStyle(fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 8, runSpacing: 6, children: [
-                      control('Audio tracks', Icons.audiotrack, _chooseAudio),
-                      control(
-                          'Subtitle tracks', Icons.subtitles, _chooseSubtitles),
-                      control('External SRT/VTT URL', Icons.closed_caption,
-                          _externalSubtitle),
-                    ]),
-                    const SizedBox(height: 8),
+                    section(
+                        'Languages and captions', Icons.closed_caption_rounded),
+                    paired(
+                        action('Audio tracks', Icons.audiotrack_rounded,
+                            _chooseAudio),
+                        action('Subtitle tracks', Icons.subtitles_rounded,
+                            _chooseSubtitles)),
+                    const SizedBox(height: 9),
+                    action('External SRT/VTT URL',
+                        Icons.closed_caption_outlined, _externalSubtitle),
+                    section('Playback', Icons.play_circle_outline_rounded),
                     Row(children: [
-                      Expanded(
-                          child: Text('Volume: ${_volume.toStringAsFixed(0)}%',
-                              maxLines: 1, overflow: TextOverflow.ellipsis)),
                       IconButton(
-                          tooltip: 'Mute',
+                          tooltip: _muted ? 'Unmute' : 'Mute',
                           onPressed: () => apply(_toggleMute),
-                          icon: Icon(
-                              _muted ? Icons.volume_off : Icons.volume_up)),
+                          icon: Icon(_muted
+                              ? Icons.volume_off_rounded
+                              : Icons.volume_up_rounded)),
+                      Text('${_volume.toStringAsFixed(0)}%'),
                       IconButton(
                           tooltip: 'Volume down',
                           onPressed: () =>
                               apply(() => _setVolume(_volume - 10)),
                           icon: const Icon(Icons.remove_circle_outline)),
+                      Expanded(
+                          child: Slider(
+                              value: _volume.clamp(0.0, 200.0),
+                              max: 200,
+                              divisions: 20,
+                              onChanged: (value) =>
+                                  apply(() => _setVolume(value)))),
                       IconButton(
                           tooltip: 'Volume up',
                           onPressed: () =>
                               apply(() => _setVolume(_volume + 10)),
                           icon: const Icon(Icons.add_circle_outline)),
                     ]),
-                    Slider(
-                        value: _volume.clamp(0.0, 200.0),
-                        min: 0,
-                        max: 200,
-                        divisions: 20,
-                        label: '${_volume.toStringAsFixed(0)}%',
-                        onChanged: (value) => apply(() => _setVolume(value))),
                     if (_volume > 100)
                       const Text(
-                          'High boost active: hearing risk / distortion possible.',
+                          'High boost: possible distortion and hearing risk.',
                           style: TextStyle(
                               color: Colors.orangeAccent, fontSize: 12)),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 9),
                     Row(children: [
                       const Text('Playback speed'),
                       const SizedBox(width: 12),
@@ -1261,24 +1436,53 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
                         },
                       )),
                     ]),
-                    if (!_canSeek)
+                    const SizedBox(height: 9),
+                    action(
+                        'Rotate lock ${_orientationLocked ? 'ON' : 'OFF'}',
+                        _orientationLocked
+                            ? Icons.screen_lock_rotation
+                            : Icons.screen_rotation,
+                        _canRotate ? () => apply(_setOrientationLock) : null),
+                    if (_canSeek) ...[
+                      const SizedBox(height: 9),
+                      paired(
+                          action('-10 sec', Icons.replay_10_rounded,
+                              () => apply(() => _seekBy(-10))),
+                          action('+10 sec', Icons.forward_10_rounded,
+                              () => apply(() => _seekBy(10)))),
+                    ] else
                       const Padding(
-                          padding: EdgeInsets.only(top: 6),
+                          padding: EdgeInsets.only(top: 8),
                           child: Text(
-                              'LIVE stream: seek/DVR is not available from this source.',
+                              'Live stream: seeking requires DVR support.',
                               style: TextStyle(
                                   color: Colors.white60, fontSize: 12))),
+                    const SizedBox(height: 13),
+                    const Text(
+                        'Fullscreen: use the video fullscreen button, or F on desktop.',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
                   ]),
             ),
           );
-        }),
-      ),
+        },
+      )),
     );
   }
 
   @override
   void didUpdateWidget(covariant PlayerView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.compact != oldWidget.compact) {
+      _overlayHideTimer?.cancel();
+      if (!widget.compact) {
+        _overlayVisible = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _scheduleOverlayHide();
+          }
+        });
+      }
+    }
     if (widget.channel.url != oldWidget.channel.url) {
       _recorder?.stop();
       _hlsRecorder?.stop();
@@ -1292,7 +1496,6 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
       _bufferingHintTimer?.cancel();
       _startupWatchdog?.cancel();
       _attempts = 0;
-      _resumeAfterForeground = false;
       unawaited(_open());
       _scheduleMediaSync();
     }
@@ -1362,177 +1565,190 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
         autofocus: Platform.isAndroid &&
             MediaQuery.sizeOf(context).shortestSide >= 600,
         onKeyEvent: _onRemoteKey,
-        child: ColoredBox(
-          color: Colors.black,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _showOverlay,
-            child: Stack(alignment: Alignment.center, children: [
-              Positioned.fill(
-                  child: Video(
-                controller: _video,
-                controls: widget.compact || Platform.isAndroid
-                    ? NoVideoControls
-                    : AdaptiveVideoControls,
-                fit: _fit,
-              )),
-              if (!widget.compact && _overlayVisible && Platform.isAndroid) ...[
-                // Central controls do not overlap fullscreen, aspect or settings.
-                Center(
-                    child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: const Color(0xB9161921),
-                    borderRadius: BorderRadius.circular(36),
-                  ),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    _overlayButton('Previous channel', Icons.skip_previous,
-                        widget.onPrevious,
-                        size: 29),
-                    _overlayButton(
-                        _playing ? 'Pause' : 'Play',
-                        _playing
-                            ? Icons.pause_rounded
-                            : Icons.play_arrow_rounded, () {
-                      unawaited(_transport(_player.playOrPause));
-                    }, size: 36),
-                    _overlayButton(
-                        'Next channel', Icons.skip_next, widget.onNext,
-                        size: 29),
-                  ]),
+        child: MouseRegion(
+          onHover: (_) {
+            if (!Platform.isAndroid) {
+              _showOverlay();
+            }
+          },
+          child: ColoredBox(
+            color: Colors.black,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _showOverlay,
+              child: Stack(alignment: Alignment.center, children: [
+                Positioned.fill(
+                    child: Video(
+                  controller: _video,
+                  controls: widget.compact || Platform.isAndroid
+                      ? NoVideoControls
+                      : AdaptiveVideoControls,
+                  fit: _fit,
                 )),
-                Positioned(
-                    top: 8,
-                    right: 8,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xCC151820),
-                        borderRadius: BorderRadius.circular(24),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        if (Platform.isAndroid)
-                          _overlayButton(
-                              _phoneLandscape
-                                  ? 'Exit fullscreen'
-                                  : 'Fullscreen',
-                              _phoneLandscape
-                                  ? Icons.fullscreen_exit
-                                  : Icons.fullscreen, () {
-                            unawaited(_toggleManualFullscreen());
-                          }),
-                        _overlayButton(
-                            'Player settings', Icons.tune_rounded, _settings),
-                      ]),
-                    )),
-                Positioned(
-                    bottom: 8,
-                    right: 8,
-                    child: Material(
-                      color: const Color(0xDD151820),
-                      borderRadius: BorderRadius.circular(20),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () {
-                          _showOverlay();
-                          _cycleVideoFit();
-                        },
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 9),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            const Icon(Icons.aspect_ratio_rounded,
-                                size: 19, color: Color(0xFFF4C65B)),
-                            const SizedBox(width: 6),
-                            Text(_videoFitLabel,
-                                maxLines: 1,
-                                style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600)),
-                          ]),
-                        ),
-                      ),
-                    )),
-              ],
-              // Keep desktop media_kit controls (seek, window fullscreen,
-              // keyboard shortcuts) intact. Native Windows controls should not
-              // be replaced by Android orientation-only buttons.
-              if (!widget.compact && !Platform.isAndroid) ...[
-                Positioned(
-                    top: 2,
-                    right: 2,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xC8000000),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        if (widget.onPrevious != null)
-                          _overlayButton('Previous channel',
-                              Icons.skip_previous, widget.onPrevious),
-                        if (widget.onNext != null)
-                          _overlayButton(
-                              'Next channel', Icons.skip_next, widget.onNext),
-                        _overlayButton(
-                            'Player settings', Icons.tune, _settings),
-                      ]),
-                    )),
-                Positioned(
-                    bottom: 8,
-                    right: 8,
-                    child: Material(
-                      color: const Color(0xD9141720),
-                      borderRadius: BorderRadius.circular(20),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: _cycleVideoFit,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 6),
-                          child: Text(_videoFitLabel,
-                              style: const TextStyle(
-                                  color: Colors.white, fontSize: 12)),
-                        ),
-                      ),
-                    )),
-              ],
-              if (!widget.compact &&
-                  _showBufferingHint &&
-                  !_loading &&
-                  _error == null)
-                const Positioned(
-                    bottom: 8,
-                    left: 8,
-                    child: IgnorePointer(
-                        child: Chip(
-                            label: Text('Buffering...',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis)))),
-              if (_loading)
-                const IgnorePointer(
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: DecoratedBox(
+                if (!widget.compact &&
+                    _overlayVisible &&
+                    Platform.isAndroid) ...[
+                  // Central controls do not overlap fullscreen, aspect or settings.
+                  Center(
+                      child: DecoratedBox(
                     decoration: BoxDecoration(
-                        color: const Color(0xED161616),
-                        borderRadius: BorderRadius.circular(12)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        Text(_error!,
-                            maxLines: widget.compact ? 1 : 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center),
-                        TextButton.icon(
-                            onPressed: _manualRetry,
-                            icon: const Icon(Icons.refresh, size: 18),
-                            label: const Text('Retry')),
-                      ]),
+                      color: const Color(0xB9161921),
+                      borderRadius: BorderRadius.circular(36),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      _overlayButton('Previous channel', Icons.skip_previous,
+                          widget.onPrevious,
+                          size: 29),
+                      _overlayButton(
+                          _playing ? 'Pause' : 'Play',
+                          _playing
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded, () {
+                        unawaited(_transport(_player.playOrPause));
+                      }, size: 36),
+                      _overlayButton(
+                          'Next channel', Icons.skip_next, widget.onNext,
+                          size: 29),
+                    ]),
+                  )),
+                  Positioned(
+                      top: 8,
+                      right: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xCC151820),
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          if (Platform.isAndroid)
+                            _overlayButton(
+                                _phoneLandscape
+                                    ? 'Exit fullscreen'
+                                    : 'Fullscreen',
+                                _phoneLandscape
+                                    ? Icons.fullscreen_exit
+                                    : Icons.fullscreen, () {
+                              unawaited(_toggleManualFullscreen());
+                            }),
+                          _overlayButton(
+                              'Player settings', Icons.tune_rounded, _settings),
+                        ]),
+                      )),
+                  Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Material(
+                        color: const Color(0xDD151820),
+                        borderRadius: BorderRadius.circular(20),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(20),
+                          onTap: () {
+                            _showOverlay();
+                            _cycleVideoFit();
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 9),
+                            child:
+                                Row(mainAxisSize: MainAxisSize.min, children: [
+                              const Icon(Icons.aspect_ratio_rounded,
+                                  size: 19, color: Color(0xFFF4C65B)),
+                              const SizedBox(width: 6),
+                              Text(_videoFitLabel,
+                                  maxLines: 1,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600)),
+                            ]),
+                          ),
+                        ),
+                      )),
+                ],
+                // Keep desktop media_kit controls (seek, window fullscreen,
+                // keyboard shortcuts) intact. Native Windows controls should not
+                // be replaced by Android orientation-only buttons.
+                if (!widget.compact &&
+                    _overlayVisible &&
+                    !Platform.isAndroid) ...[
+                  Positioned(
+                      top: 2,
+                      right: 2,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xC8000000),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          if (widget.onPrevious != null)
+                            _overlayButton('Previous channel',
+                                Icons.skip_previous, widget.onPrevious),
+                          if (widget.onNext != null)
+                            _overlayButton(
+                                'Next channel', Icons.skip_next, widget.onNext),
+                          _overlayButton(
+                              'Player settings', Icons.tune, _settings),
+                        ]),
+                      )),
+                  Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Material(
+                        color: const Color(0xD9141720),
+                        borderRadius: BorderRadius.circular(20),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(20),
+                          onTap: _cycleVideoFit,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
+                            child: Text(_videoFitLabel,
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 12)),
+                          ),
+                        ),
+                      )),
+                ],
+                if (!widget.compact &&
+                    _showBufferingHint &&
+                    !_loading &&
+                    _error == null)
+                  const Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: IgnorePointer(
+                          child: Chip(
+                              label: Text('Buffering...',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis)))),
+                if (_loading)
+                  const IgnorePointer(
+                      child: CircularProgressIndicator(strokeWidth: 2)),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                          color: const Color(0xED161616),
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text(_error!,
+                              maxLines: widget.compact ? 1 : 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center),
+                          TextButton.icon(
+                              onPressed: _manualRetry,
+                              icon: const Icon(Icons.refresh, size: 18),
+                              label: const Text('Retry')),
+                        ]),
+                      ),
                     ),
                   ),
-                ),
-            ]),
+              ]),
+            ),
           ),
         ),
       );

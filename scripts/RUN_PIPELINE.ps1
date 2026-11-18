@@ -1,4 +1,4 @@
-﻿# SanSeth Play v0.1.0+1 - Windows PowerShell 5.1 or 7
+﻿# SanSeth Play v0.1.1+2 - Windows PowerShell 5.1 or 7
 # All commands and verbose output are visible in the VS Code terminal.
 # Diagnostic logs are written ONLY when a step fails.
 [CmdletBinding()]
@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $Root
-$Version = 'v0.1.0+1'
+$Version = 'v0.1.1+2'
 $LogDir = Join-Path $Root 'failure-logs'
 $DistDir = Join-Path $Root 'dist'
 $script:CurrentStage = 'startup'
@@ -141,6 +141,10 @@ function Test-Project {
 }
 function Build-Android([bool]$Tv) {
   $name = if ($Tv) {'android-tv'} else {'android-mobile'}
+  # Resolve native player artifacts before Gradle configuration (where upstream has no retry).
+  Invoke-Checked '06c_prefetch_media_kit' 'powershell.exe' @(
+    '-NoProfile','-ExecutionPolicy','Bypass','-File',
+    (Join-Path $Root 'scripts/PREFETCH_MEDIA_KIT_ANDROID.ps1'), '-ProjectRoot', $Root)
   Invoke-Checked "07_build_$name" 'flutter' @('build','apk','--release','--verbose')
   $apk = Join-Path $Root 'build/app/outputs/flutter-apk/app-release.apk'
   if (-not (Test-Path $apk)) { throw "Release APK missing: $apk" }

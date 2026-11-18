@@ -7,6 +7,8 @@
 .pub/
 build/
 coverage/
+android/
+windows/
 linux/
 macos/
 ios/
@@ -52,27 +54,3 @@ GoogleService-Info.plist
 *.iml
 .DS_Store
 Thumbs.db
-
-# Native source is tracked; native generated caches and user-local settings are not.
-android/.gradle/
-android/local.properties
-android/key.properties
-android/**/build/
-android/.cxx/
-windows/flutter/ephemeral/
-windows/**/CMakeFiles/
-windows/**/build/
-windows/.vs/
-*.obj
-*.pdb
-*.ilk
-*.tlog
-*.lastbuildstate
-*.VC.db
-*.VC.opendb
-*.exe
-*.dll
-*.msi
-*.msix
-*.apk
-*.aab

@@ -11,6 +11,8 @@ void main() {
     const Size(360, 640),
     const Size(800, 480),
     const Size(800, 360),
+    const Size(800, 359),
+    const Size(800, 361),
     const Size(915, 412),
     const Size(1024, 768),
     const Size(1920, 1080),

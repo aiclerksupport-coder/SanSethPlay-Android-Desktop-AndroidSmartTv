@@ -1,11 +1,11 @@
-﻿# SanSeth Play - one-line Windows installer build, with tests and failure-only logs.
+# SanSeth Play - one-line Windows installer build, with tests and failure-only logs.
 # Requires Flutter + Visual Studio C++ + Inno Setup 6 (ISCC.exe).
 [CmdletBinding()]
 param([switch]$SkipTests, [string]$IsccPath = '')
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 Set-Location $Root
-$version = 'v0.1.0+1'
+$version = 'v0.1.1+2'
 $failureDir = Join-Path $Root 'failure-logs'
 $buffer = New-Object 'System.Collections.Generic.List[string]'
 function Run-Stage([string]$Name, [string]$File, [string[]]$ArgsList) {
@@ -54,12 +54,12 @@ try {
 [Setup]
 AppId={{C96E1321-81E2-4CE9-A20A-E6DD50A5E117}
 AppName=SanSeth Play
-AppVersion=0.1.0
+AppVersion=0.1.1
 AppPublisher=Kalpesh Chhabhaiya
 DefaultDirName={autopf}\SanSeth Play
 DefaultGroupName=SanSeth Play
 OutputDir=$installerEscaped
-OutputBaseFilename=SanSeth-Play-v0.1.0+1-Windows-Setup
+OutputBaseFilename=SanSeth-Play-v0.1.1+2-Windows-Setup
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -83,7 +83,7 @@ Filename: "{app}\$($exe.Name)"; Description: "Launch SanSeth Play"; Flags: nowai
   Write-Host 'Installer is NOT signed. Windows SmartScreen may warn. Code signing required for public distribution.' -ForegroundColor Yellow
 } catch {
   New-Item -ItemType Directory -Force -Path $failureDir | Out-Null
-  $failure = Join-Path $failureDir 'FAILED_windows_installer-v0.1.0+1.log'
+  $failure = Join-Path $failureDir 'FAILED_windows_installer-v0.1.1+2.log'
   @("Reason: $($_.Exception.Message)","Stack: $($_.ScriptStackTrace)",'') + $buffer |
     Set-Content -Path $failure -Encoding UTF8
   Write-Host "FAILED. Diagnostics: $failure" -ForegroundColor Red

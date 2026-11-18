@@ -1,6 +1,6 @@
 # Security Policy — SanSeth Play
 
-Current version: v0.1.0+1 development source. No release build is certified across
+Current version: v0.1.1+2 candidate source. No release build is certified across
 all target platforms. Security reports should use GitHub private vulnerability
 reporting where available in repository Settings > Security; otherwise contact the
 repository owner privately. Never post provider credentials or tokenized playlist

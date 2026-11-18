@@ -1,4 +1,4 @@
-﻿# Post-install cold launch check, compatible with Windows PowerShell 5.1.
+# Post-install cold launch check, compatible with Windows PowerShell 5.1.
 [CmdletBinding()]
 param([string]$DeviceSerial = '', [string]$PackageId = 'com.example.sanseth_play', [switch]$Tv)
 $ErrorActionPreference = 'Stop'
@@ -51,7 +51,7 @@ try {
   Write-Host 'This smoke test does not certify playback, casting, DVR or UI performance.' -ForegroundColor Yellow
 } catch {
   New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-  $file = Join-Path $logDir 'FAILED_ANDROID_LAUNCH-v0.1.0+1.log'
+  $file = Join-Path $logDir 'FAILED_ANDROID_LAUNCH-v0.1.1+2.log'
   $transcript.Add("Failure: $($_.Exception.Message)")
   $transcript.Add("Device: $DeviceSerial")
   $transcript.Add("Package: $PackageId")

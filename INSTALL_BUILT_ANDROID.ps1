@@ -1,4 +1,4 @@
-﻿# Install existing release APK - never rebuild; auto-select ONE matching target after device connection.
+# Install existing release APK - never rebuild; auto-select ONE matching target after device connection.
 [CmdletBinding()]
 param([ValidateSet('mobile','tv')][string]$Target='mobile',[string]$DeviceSerial='')
 $ErrorActionPreference='Stop'
@@ -45,7 +45,7 @@ try {
   exit 0
 } catch {
   New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-  $log=Join-Path $logDir 'FAILED_postbuild_install-v0.1.0+1.log'
+  $log=Join-Path $logDir 'FAILED_postbuild_install-v0.1.1+2.log'
   @($_.Exception.Message,$_.ScriptStackTrace) | Set-Content -Path $log -Encoding UTF8
   Write-Host "INSTALL FAILED: $($_.Exception.Message) | log: $log" -ForegroundColor Red
   exit 1

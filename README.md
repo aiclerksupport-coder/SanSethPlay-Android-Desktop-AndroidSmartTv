@@ -1,4 +1,4 @@
-# SanSeth Play — v0.1.0+1
+# SanSeth Play — v0.1.1+2
 
 SanSeth Play is a Flutter IPTV/M3U media player for user-provided, authorized media sources. Android Mobile, Android Smart TV and Windows Desktop share the Flutter UI; native build/installation must be verified separately.
 

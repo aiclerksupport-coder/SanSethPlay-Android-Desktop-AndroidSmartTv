@@ -1,4 +1,4 @@
-﻿# Invoke only from BUILD_TEST_INSTALL_GITHUB.ps1 after ALL gates pass.
+# Invoke only from BUILD_TEST_INSTALL_GITHUB.ps1 after ALL gates pass.
 [CmdletBinding()]
 param([Parameter(Mandatory=$true)][string]$VerificationToken)
 $ErrorActionPreference = 'Stop'
@@ -8,7 +8,7 @@ $GitDir = Join-Path $Root '.git'
 $TokenFile = Join-Path $Root 'dist\github-ready-gate.json'
 if (-not (Test-Path $TokenFile)) { throw 'Verification gate missing; run BUILD_TEST_INSTALL_GITHUB.ps1 first.' }
 $gate = Get-Content -Raw $TokenFile | ConvertFrom-Json
-if ($gate.token -ne $VerificationToken -or $gate.passed -ne $true -or $gate.version -ne '0.1.0+1') {
+if ($gate.token -ne $VerificationToken -or $gate.passed -ne $true -or $gate.version -ne '0.1.1+2') {
   throw 'Verification gate invalid or stale.'
 }
 if (Test-Path $GitDir) { throw 'Existing .git folder detected. Refusing to overwrite history; use a clean extracted ZIP.' }
@@ -36,7 +36,7 @@ try {
     & git diff --cached --check
     if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed' }
     if ($paths.Count -eq 0) { Write-Host 'Nothing new to push.'; return }
-    & git commit -m 'SanSeth Play v0.1.0+1: three-platform verified source'
+    & git commit -m 'SanSeth Play v0.1.1+2: three-platform verified source'
     if ($LASTEXITCODE -ne 0) { throw 'Git commit failed. Configure git user.name and user.email.' }
     & git push origin main
     if ($LASTEXITCODE -ne 0) { throw 'GitHub push failed. Remote branch may have moved; refusing force push.' }

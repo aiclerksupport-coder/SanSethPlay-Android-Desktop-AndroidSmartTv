@@ -1,0 +1,32 @@
+{
+  "base_zip": "SanSeth-Play-v0.1.0+1-PREMIUM-PLAYER-LANDSCAPE-OVERFLOW-TEST-FIX-SOURCE.zip",
+  "candidate_zip": "SanSeth-Play-v0.1.1+2-CHANGES-1-TO-5-PREMIUM-UI-CANDIDATE-SOURCE.zip",
+  "version": "0.1.1+2",
+  "files_count": 200,
+  "modified_files": [
+    "BUILD_TEST_INSTALL_GITHUB.ps1",
+    "BUILD_WINDOWS_INSTALLER.ps1",
+    "INSTALL_BUILT_ANDROID.ps1",
+    "PUSH_AFTER_VERIFIED.ps1",
+    "README.md",
+    "RUN_ANALYZE_DIAGNOSTICS.ps1",
+    "SECURITY.md",
+    "VERIFY_ANDROID_LAUNCH.ps1",
+    "VERIFY_WINDOWS_INSTALLER.ps1",
+    "VERIFY_WINDOWS_LAUNCH.ps1",
+    "lib/app/home_screen.dart",
+    "lib/app/sanseth_app.dart",
+    "lib/player/player_view.dart",
+    "pubspec.yaml",
+    "scripts/RUN_PIPELINE.ps1"
+  ],
+  "added_files": [
+    "docs/BASE_TO_CANDIDATE_DIFF.json",
+    "docs/V0_1_1_PREMIUM_CHANGE_BATCH_HINGLISH.md"
+  ],
+  "deleted_files": [],
+  "brand_assets_sha256_unmodified": true,
+  "flutter_analyze": "not_run_sdk_unavailable",
+  "flutter_tests": "not_run_sdk_unavailable",
+  "release_build": "not_run_sdk_unavailable"
+}

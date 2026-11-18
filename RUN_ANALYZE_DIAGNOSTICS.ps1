@@ -1,4 +1,4 @@
-﻿# SanSeth Play v0.1.0+1 - live terminal output + guaranteed failure diagnostics.
+# SanSeth Play v0.1.1+2 - live terminal output + guaranteed failure diagnostics.
 # Compatible with Windows PowerShell 5.1. Invoke external commands with
 # ErrorActionPreference=Continue so stderr/nonzero status cannot bypass log finalization.
 [CmdletBinding()]
@@ -7,9 +7,9 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 Set-Location -LiteralPath $root
 $logDir = Join-Path $root 'failure-logs'
-$full = Join-Path $logDir 'ANALYZE_FULL-v0.1.0+1.log'
-$machine = Join-Path $logDir 'ANALYZE_MACHINE-v0.1.0+1.log'
-$tmp = Join-Path $logDir 'ANALYZE_RUNNING-v0.1.0+1.tmp.log'
+$full = Join-Path $logDir 'ANALYZE_FULL-v0.1.1+2.log'
+$machine = Join-Path $logDir 'ANALYZE_MACHINE-v0.1.1+2.log'
+$tmp = Join-Path $logDir 'ANALYZE_RUNNING-v0.1.1+2.tmp.log'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 # Remove stale output so an earlier run cannot be mistaken for this one.
 Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue

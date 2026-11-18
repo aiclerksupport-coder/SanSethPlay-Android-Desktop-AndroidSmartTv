@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {"label":"SanSeth: All Tests", "type":"shell", "command":"powershell.exe", "args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}\\RUN_ALL_TESTS.ps1"], "problemMatcher":[]},
+    {"label":"SanSeth: Android Mobile Build+Install", "type":"shell", "command":"powershell.exe", "args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}\\BUILD_ANDROID_MOBILE.ps1"], "problemMatcher":[]},
+    {"label":"SanSeth: Windows Build", "type":"shell", "command":"powershell.exe", "args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}\\BUILD_WINDOWS.ps1"], "problemMatcher":[]},
+    {"label":"SanSeth: Android TV Build+Install", "type":"shell", "command":"powershell.exe", "args":["-NoProfile","-ExecutionPolicy","Bypass","-File","${workspaceFolder}\\BUILD_ANDROID_TV.ps1"], "problemMatcher":[]}
+  ]
+}

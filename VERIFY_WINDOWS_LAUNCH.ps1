@@ -1,4 +1,4 @@
-﻿# Windows portable exe smoke check; Windows only, run after BUILD_WINDOWS.ps1.
+# Windows portable exe smoke check; Windows only, run after BUILD_WINDOWS.ps1.
 [CmdletBinding()]
 param([string]$ReleaseFolder = '')
 $ErrorActionPreference = 'Stop'
@@ -6,7 +6,7 @@ $Root = $PSScriptRoot
 $logDir = Join-Path $Root 'failure-logs'
 $process = $null
 try {
-  if (-not $ReleaseFolder) { $ReleaseFolder = Join-Path $Root 'dist\SanSeth-Play-v0.1.0+1-Windows' }
+  if (-not $ReleaseFolder) { $ReleaseFolder = Join-Path $Root 'dist\SanSeth-Play-v0.1.1+2-Windows' }
   if (-not (Test-Path $ReleaseFolder)) { throw 'Windows release folder missing; run BUILD_WINDOWS.ps1' }
   $exe = Get-ChildItem $ReleaseFolder -Filter '*.exe' -File | Select-Object -First 1
   if (-not $exe) { throw 'Windows executable missing' }
@@ -21,7 +21,7 @@ try {
   Write-Host 'Manual check still required for stream playback, MediaSession, layout, and installer.' -ForegroundColor Yellow
 } catch {
   New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-  @("Failure: $($_.Exception.Message)","Folder: $ReleaseFolder") | Set-Content (Join-Path $logDir 'FAILED_WINDOWS_LAUNCH-v0.1.0+1.log') -Encoding UTF8
+  @("Failure: $($_.Exception.Message)","Folder: $ReleaseFolder") | Set-Content (Join-Path $logDir 'FAILED_WINDOWS_LAUNCH-v0.1.1+2.log') -Encoding UTF8
   Write-Host "FAILED: $($_.Exception.Message)" -ForegroundColor Red
   exit 1
 } finally {
