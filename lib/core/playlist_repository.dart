@@ -7,12 +7,13 @@ import 'saved_playlist.dart';
 
 class PlaylistRepository {
   PlaylistRepository({http.Client? client}) : _client = client ?? http.Client();
-  static const maxBytes = 8 * 1024 * 1024;
+  static const maxBytes = 64 * 1024 * 1024;
   final http.Client _client;
 
   Future<List<StreamChannel>> fromText(String contents) async {
     if (utf8.encode(contents).length > maxBytes) {
-      throw const FormatException('Playlist 8 MB se badi hai.');
+      throw const FormatException(
+          'Playlist device safety limit (64 MB) se badi hai.');
     }
     return compute(M3uParser.parse, contents);
   }
@@ -49,7 +50,8 @@ class PlaylistRepository {
       await for (final chunk
           in response.stream.timeout(const Duration(seconds: 18))) {
         if (bytes.length + chunk.length > maxBytes) {
-          throw const FormatException('Playlist 8 MB se badi hai.');
+          throw const FormatException(
+              'Playlist device safety limit (64 MB) se badi hai.');
         }
         bytes.addAll(chunk);
       }

@@ -85,8 +85,9 @@ class XtreamEpisode {
 class XtreamClient {
   XtreamClient({http.Client? client}) : _client = client ?? http.Client();
   final http.Client _client;
-  static const maxBytes = 12 * 1024 * 1024;
-  static const maxItems = 25000;
+  static const maxBytes = 64 * 1024 * 1024;
+  // Provider catalogs are not artificially truncated by item count.
+  // A bounded response size still guards against untrusted huge payloads.
 
   Future<Object?> _fetch(Uri url) async {
     final response = await _client
@@ -142,7 +143,7 @@ class XtreamClient {
       throw const FormatException('Invalid category list');
     }
     final output = <String, String>{};
-    for (final entry in data.take(maxItems)) {
+    for (final entry in data) {
       if (entry is! Map) {
         continue;
       }
@@ -167,7 +168,7 @@ class XtreamClient {
       throw const FormatException('Invalid provider catalog');
     }
     final items = <XtreamItem>[];
-    for (final entry in data.take(maxItems)) {
+    for (final entry in data) {
       if (entry is! Map) {
         continue;
       }
@@ -218,9 +219,6 @@ class XtreamClient {
         continue;
       }
       for (final raw in (group.value as List)) {
-        if (result.length >= maxItems) {
-          return result;
-        }
         if (raw is! Map) {
           continue;
         }

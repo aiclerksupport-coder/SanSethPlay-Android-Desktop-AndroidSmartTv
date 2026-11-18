@@ -26,9 +26,9 @@ class ChannelCache {
   Future<SecretKey>? _key;
   Future<void> _writes = Future<void>.value();
 
-  // The playlist parser limits this to 20k; cache preserves all parsed channels.
-  static const int maxChannels = 20000;
-  static const int maxEncodedBytes = 32 * 1024 * 1024;
+  // No artificial channel-count ceiling. Cache size remains bounded to protect
+  // memory/disk when an untrusted remote playlist is abnormally large.
+  static const int maxEncodedBytes = 128 * 1024 * 1024;
   static const String _secretName = 'sanseth_cache_aes256_v2';
   static String _oldKey(String id) => 'sanseth_channels_v1_$id';
 
@@ -109,7 +109,7 @@ class ChannelCache {
   }
 
   Future<bool> save(String id, List<StreamChannel> channels) async {
-    if (channels.isEmpty || channels.length > maxChannels) {
+    if (channels.isEmpty) {
       return false;
     }
     final raw = await compute(encode, channels);
@@ -159,7 +159,6 @@ class ChannelCache {
         'v': 1,
         'saved': DateTime.now().toUtc().toIso8601String(),
         'items': channels
-            .take(maxChannels)
             .map((c) => <String, String?>{
                   'n': c.name,
                   'u': c.url.toString(),
@@ -182,7 +181,7 @@ class ChannelCache {
         return const [];
       }
       final result = <StreamChannel>[];
-      for (final item in (data['items'] as List).take(maxChannels)) {
+      for (final item in (data['items'] as List)) {
         if (item is! Map) {
           continue;
         }

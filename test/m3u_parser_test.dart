@@ -2,6 +2,17 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanseth_play/core/m3u_parser.dart';
 
 void main() {
+  test('parses more than 50,000 channels without truncation', () {
+    final input = StringBuffer('#EXTM3U\n');
+    for (var i = 0; i < 55000; i++) {
+      input.writeln('#EXTINF:-1 group-title="Large",Channel $i');
+      input.writeln('https://example.org/stream/$i.m3u8');
+    }
+    final channels = M3uParser.parse(input.toString());
+    expect(channels, hasLength(55000));
+    expect(channels.last.name, 'Channel 54999');
+  });
+
   test('parses groups, id, logo and channel', () {
     const source = """#EXTM3U
 #EXTINF:-1 tvg-id="news" tvg-logo="https://a.test/icon.png" group-title="News, World",News HD

@@ -37,7 +37,7 @@ class M3uParser {
         group = line.substring('#EXTGRP:'.length).trim();
       } else if (line.isNotEmpty && !line.startsWith('#')) {
         final url = _safeUri(line);
-        if (url != null && results.length < 20000) {
+        if (url != null) {
           final fallback =
               url.pathSegments.isNotEmpty ? url.pathSegments.last : url.host;
           results.add(StreamChannel(

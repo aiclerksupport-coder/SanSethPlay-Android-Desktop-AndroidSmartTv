@@ -420,7 +420,7 @@ class _HomeScreenState extends State<HomeScreen> {
         final stored = await _cache.save(playlist.id, loaded);
         if (!stored && mounted && generation == _loadGeneration) {
           setState(() => _message =
-              '${loaded.length} channels ready • Offline cache limit reached (20k channels / 32 MB)');
+              '${loaded.length} channels ready • Offline cache capacity reached');
         }
       } catch (_) {
         if (mounted && generation == _loadGeneration) {
@@ -1299,9 +1299,11 @@ class _HomeScreenState extends State<HomeScreen> {
       for (var i = 0; i < _recentHashes.length; i++) _recentHashes[i]: i,
     };
     final result = _channels.where((channel) {
-      final identifier = RecentChannelStore.identifier(channel.url);
+      // Hash only when the corresponding filter is selected. On 50k+
+      // channels, SHA-256 for every item on every normal build causes jank.
       if (_filter == ChannelFilter.recent &&
-          !recentOrder.containsKey(identifier)) {
+          !recentOrder
+              .containsKey(RecentChannelStore.identifier(channel.url))) {
         return false;
       }
       if (_filter == ChannelFilter.favorites &&
@@ -1310,6 +1312,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       if (_group != 'All groups' && channel.group != _group) {
         return false;
+      }
+      if (_query.isEmpty) {
+        return true;
       }
       return channel.name.toLowerCase().contains(_query) ||
           channel.group.toLowerCase().contains(_query);
