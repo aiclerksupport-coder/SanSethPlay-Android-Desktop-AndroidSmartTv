@@ -1,4 +1,4 @@
-﻿# SanSeth Play v0.1.3+4 - Windows PowerShell 5.1 or 7
+﻿# SanSeth Play v0.1.4+5 - Windows PowerShell 5.1 or 7
 # All commands and verbose output are visible in the VS Code terminal.
 # Diagnostic logs are written ONLY when a step fails.
 [CmdletBinding()]
@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $Root
-$Version = 'v0.1.3+4'
+$Version = 'v0.1.4+5'
 $LogDir = Join-Path $Root 'failure-logs'
 $DistDir = Join-Path $Root 'dist'
 $script:CurrentStage = 'startup'

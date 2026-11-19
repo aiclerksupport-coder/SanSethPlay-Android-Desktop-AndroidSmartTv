@@ -8,7 +8,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Conservative, per-device channel observations. An HTTP status is NOT proof
 /// that video decodes; only the active player can confirm actual playback.
 /// Unknown, geo-restricted and transient failures remain visible.
-enum ChannelHealth { unknown, reachable, playing, unavailable }
+enum ChannelHealth {
+  unknown,
+  reachable,
+  playing,
+  unavailable,
+  temporarilyUnavailable
+}
 
 class ChannelHealthRecord {
   const ChannelHealthRecord(this.health, this.checkedAt, this.failures);
@@ -23,6 +29,7 @@ class ChannelHealthStore extends ChangeNotifier {
   static const _storageKey = 'sanseth.channel.health.v1';
   static const _unavailableLifetime = Duration(minutes: 5);
   static const _playingLifetime = Duration(hours: 2);
+  static const _temporaryFailureLifetime = Duration(minutes: 2);
   final DateTime Function() _now;
   final Map<String, ChannelHealthRecord> _records = {};
   Timer? _saveTimer;
@@ -83,6 +90,10 @@ class ChannelHealthStore extends ChangeNotifier {
     if (record.health == ChannelHealth.playing && elapsed >= _playingLifetime) {
       return ChannelHealth.unknown;
     }
+    if (record.health == ChannelHealth.temporarilyUnavailable &&
+        elapsed >= _temporaryFailureLifetime) {
+      return ChannelHealth.unknown;
+    }
     return record.health;
   }
 
@@ -95,11 +106,13 @@ class ChannelHealthStore extends ChangeNotifier {
       return false;
     }
     return elapsed >=
-        (record.health == ChannelHealth.unavailable
-            ? _unavailableLifetime
-            : record.health == ChannelHealth.unknown && record.failures > 0
-                ? const Duration(seconds: 20)
-                : const Duration(minutes: 15));
+        (record.health == ChannelHealth.temporarilyUnavailable
+            ? _temporaryFailureLifetime
+            : record.health == ChannelHealth.unavailable
+                ? _unavailableLifetime
+                : record.health == ChannelHealth.unknown && record.failures > 0
+                    ? const Duration(seconds: 20)
+                    : const Duration(minutes: 15));
   }
 
   void playing(Uri url) {
@@ -146,9 +159,11 @@ class ChannelHealthStore extends ChangeNotifier {
   void expire() {
     final now = _now();
     final expired = _records.entries
-        .where((entry) =>
-            entry.value.health == ChannelHealth.unavailable &&
-            now.difference(entry.value.checkedAt) >= _unavailableLifetime)
+        .where((entry) => (entry.value.health == ChannelHealth.unavailable &&
+                now.difference(entry.value.checkedAt) >= _unavailableLifetime ||
+            entry.value.health == ChannelHealth.temporarilyUnavailable &&
+                now.difference(entry.value.checkedAt) >=
+                    _temporaryFailureLifetime))
         .map((entry) => entry.key)
         .toList(growable: false);
     if (expired.isEmpty) return;
@@ -167,6 +182,18 @@ class ChannelHealthStore extends ChangeNotifier {
     final key = _key(url);
     if (_records[key]?.health == ChannelHealth.playing) return;
     _records[key] = ChannelHealthRecord(ChannelHealth.unknown, _now(), 0);
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Decoder exhausted its retries. Hide only temporarily from filtered
+  /// lists; never erase a playlist entry or persist this ambiguous failure.
+  /// A user can immediately recover it using Show all channels.
+  void playbackExhausted(Uri url) {
+    final key = _key(url);
+    // A stream that worked earlier may fail now; this remains a short,
+    // reversible UI observation, not a permanent link classification.
+    _records[key] =
+        ChannelHealthRecord(ChannelHealth.temporarilyUnavailable, _now(), 0);
     if (!_disposed) notifyListeners();
   }
 

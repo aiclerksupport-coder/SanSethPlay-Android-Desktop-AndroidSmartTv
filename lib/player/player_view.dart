@@ -145,9 +145,9 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
   bool _timeshiftStarting = false;
 
   static const _retryDelays = <Duration>[
-    Duration(seconds: 2),
+    Duration(seconds: 1),
+    Duration(seconds: 3),
     Duration(seconds: 5),
-    Duration(seconds: 12),
   ];
 
   // This controls only the on-video overlay. The underlying Player and
@@ -511,7 +511,7 @@ class _PlayerViewState extends State<PlayerView> with WidgetsBindingObserver {
           // Some IPTV URLs never emit a decoder error even when no frames
           // arrive. Bound initial waiting, but do not disrupt live playback.
           _startupWatchdog?.cancel();
-          _startupWatchdog = Timer(const Duration(seconds: 18), () {
+          _startupWatchdog = Timer(const Duration(seconds: 12), () {
             if (mounted &&
                 generation == _generation &&
                 !_playing &&

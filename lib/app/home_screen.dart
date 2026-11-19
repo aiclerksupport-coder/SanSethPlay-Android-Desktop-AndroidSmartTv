@@ -25,8 +25,8 @@ import 'xtream_browser.dart';
 import 'recordings_dialog.dart';
 import 'about_dialog.dart';
 
-const _gold = Color(0xFFF4C65B);
-const _panel = Color(0xFF0D1C31);
+const _gold = Color(0xFFF5C75C);
+const _panel = Color(0xFF0B2039);
 
 enum ChannelFilter { all, favorites, recent }
 
@@ -54,7 +54,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (healthy) {
       _health.playing(url);
     } else {
-      _health.playbackFailed(url);
+      _health.playbackExhausted(url);
     }
   }
 
@@ -312,11 +312,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _loadGeneration = 0;
   Future<void> _playlistWrite = Future<void>.value();
   bool _sourceMutationBusy = false;
+  bool _refreshAllBusy = false;
+  bool _activeRefreshBusy = false;
   final _search = TextEditingController();
   final _searchFocus = FocusNode();
   final _shortcutsFocus = FocusNode();
   List<StreamChannel> _channels = const [];
   StreamChannel? _selected;
+  // A stable element identity avoids a decoder teardown when portrait/landscape
+  // rearrange the exact same player view within a single frame.
+  final GlobalKey _primaryPlayerKey =
+      GlobalKey(debugLabel: 'sanseth-primary-player');
   Set<String> _favorites = {};
   String _group = 'All groups';
   ChannelFilter _filter = ChannelFilter.all;
@@ -462,7 +468,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
-        backgroundColor: const Color(0xFF10213A),
+        backgroundColor: const Color(0xFF102640),
         builder: (sheetContext) {
           _channelSheetContext = sheetContext;
           return FractionallySizedBox(
@@ -541,8 +547,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _savedPlaylists.any((p) => p.id == _activePlaylistId && !_canOpen(p))) {
       return;
     }
-    // Selecting a channel must close the software keyboard if the user was
-    // searching; keep keyboard/remote shortcuts on the non-editable root.
+    // Close the keyboard only on an explicit channel selection. Filtering and
+    // health-triggered rebuilds must never steal focus from the search field.
     if (_searchFocus.hasFocus) {
       _shortcutsFocus.requestFocus();
     }
@@ -627,6 +633,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             : saved.where((p) => p.id == restored.playlistId);
         await _openPlaylist(
             match != null && match.isNotEmpty ? match.first : accessible.first);
+      }
+      // Once per cold start, update the other accessible M3U caches in the
+      // background. The active source was already fetched by _openPlaylist.
+      // This intentionally does not delay first paint or touch the decoder.
+      if (mounted) {
+        unawaited(_refreshAllSavedPlaylists(startup: true));
       }
     } catch (_) {
       if (mounted) {
@@ -1314,13 +1326,122 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  void _refreshActive() {
-    if (_busy) {
+  // Reload metadata without reopening or disposing the current playback.
+  // The current channel stays playing even if removed from the new list; only
+  // the next explicit channel selection changes the native player source.
+  Future<void> _refreshActive() async {
+    if (_busy || _activeRefreshBusy) {
       return;
     }
-    final active = _savedPlaylists.where((p) => p.id == _activePlaylistId);
-    if (active.isNotEmpty && _canOpen(active.first)) {
-      _openPlaylist(active.first);
+    final matches = _savedPlaylists.where((p) => p.id == _activePlaylistId);
+    if (matches.isEmpty || !_canOpen(matches.first)) {
+      return;
+    }
+    final playlist = matches.first;
+    if (playlist.kind == PlaylistKind.directStream) {
+      return;
+    }
+    final generation = _loadGeneration;
+    _activeRefreshBusy = true;
+    try {
+      final updated = await _repository.fromUrl(playlist.url);
+      if (!mounted ||
+          generation != _loadGeneration ||
+          _activePlaylistId != playlist.id ||
+          updated.isEmpty ||
+          !_sameSavedSource(playlist) ||
+          !_canOpen(playlist)) {
+        return;
+      }
+      setState(() {
+        _channels = updated;
+        // Preserve playback, category, search, favorites and scroll state.
+        _message =
+            '${updated.length} channels refreshed • Player uninterrupted';
+      });
+      _healthScanner.clear();
+      _scanCursor = 0;
+      _scheduleHealthChecks();
+      try {
+        await _cache.save(playlist.id, updated);
+      } catch (_) {
+        // Cache failure must never undo the fresh channel list.
+      }
+    } catch (_) {
+      if (mounted &&
+          generation == _loadGeneration &&
+          _activePlaylistId == playlist.id) {
+        setState(() => _message = 'Refresh failed • Keeping previous channels');
+      }
+    } finally {
+      _activeRefreshBusy = false;
+    }
+  }
+
+  bool _sameSavedSource(SavedPlaylist candidate) => _savedPlaylists.any((p) =>
+      p.id == candidate.id &&
+      p.kind == candidate.kind &&
+      playlistSourceKey(p.url) == playlistSourceKey(candidate.url));
+
+  // Single worker: avoid saturating a low-RAM phone or network with dozens of
+  // 64 MB M3U downloads. Protected/locked playlists remain untouched.
+  Future<void> _refreshAllSavedPlaylists({bool startup = false}) async {
+    if (_refreshAllBusy || !mounted) {
+      if (!startup && mounted) {
+        setState(() => _message = 'Playlist refresh already running');
+      }
+      return;
+    }
+    _refreshAllBusy = true;
+    var updated = 0;
+    var failed = 0;
+    try {
+      final snapshot = List<SavedPlaylist>.of(_savedPlaylists);
+      if (!startup) {
+        await _refreshActive();
+      }
+      for (final playlist in snapshot) {
+        if (!mounted) {
+          return;
+        }
+        if (playlist.kind != PlaylistKind.remoteM3u ||
+            _protected(playlist) ||
+            !_sameSavedSource(playlist) ||
+            playlist.id == _activePlaylistId) {
+          continue;
+        }
+        try {
+          final channels = await _repository.fromUrl(playlist.url);
+          if (!mounted) {
+            return;
+          }
+          // Edits, deletes, privacy changes and tab switches invalidate the
+          // pending network result; never recreate a removed cache entry.
+          if (_protected(playlist) ||
+              !_sameSavedSource(playlist) ||
+              playlist.id == _activePlaylistId) {
+            continue;
+          }
+          if (channels.isEmpty) {
+            failed++;
+            continue;
+          }
+          if (await _cache.save(playlist.id, channels)) {
+            updated++;
+          } else {
+            failed++;
+          }
+        } catch (_) {
+          // Network failures retain the last-known-good encrypted snapshot.
+          failed++;
+        }
+      }
+      if (!startup && mounted) {
+        setState(() => _message =
+            'Playlists refreshed: $updated cached • $failed unavailable');
+      }
+    } finally {
+      _refreshAllBusy = false;
     }
   }
 
@@ -1461,9 +1582,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 )),
               ])),
           actions: [
+            if (!includeHidden &&
+                filtered.any(
+                    (p) => p.kind == PlaylistKind.remoteM3u && !_protected(p)))
+              TextButton.icon(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    unawaited(_refreshAllSavedPlaylists());
+                  },
+                  icon: const Icon(Icons.sync_rounded),
+                  label: const Text('Refresh all')),
             TextButton(
                 onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('Close'))
+                child: const Text('Close')),
           ],
         );
       }),
@@ -1665,11 +1796,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       for (var i = 0; i < _recentHashes.length; i++) _recentHashes[i]: i,
     };
     final result = _channels.where((channel) {
-      if (_hideUnavailable &&
-          _health.hasConfirmedUnavailable &&
-          channel.url != _selected?.url &&
-          _health.status(channel.url) == ChannelHealth.unavailable) {
-        return false;
+      if (_hideUnavailable && channel.url != _selected?.url) {
+        final health = _health.status(channel.url);
+        if (health == ChannelHealth.unavailable ||
+            health == ChannelHealth.temporarilyUnavailable) {
+          return false;
+        }
       }
       // Hash only when the corresponding filter is selected. On 50k+
       // channels, SHA-256 for every item on every normal build causes jank.
@@ -1737,7 +1869,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // browser first until a stream is selected; keep normal playback unchanged.
     final compactEmptyLibrary =
         _selected == null && size.width < 850 && size.height < 720;
-    final channelBrowserOnly = (_navIndex == 2 || compactEmptyLibrary) &&
+    final channelBrowserOnly = !desktop &&
+        (_navIndex == 1 || compactEmptyLibrary) &&
         _selected == null &&
         !mobileLandscape;
 
@@ -1824,7 +1957,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           _clearRecent();
                         }
                         if (value == 'refresh') {
-                          _refreshActive();
+                          unawaited(_refreshActive());
+                        }
+                        if (value == 'refresh-all') {
+                          unawaited(_refreshAllSavedPlaylists());
                         }
                         if (value == 'remove') {
                           _removeActivePlaylist();
@@ -1868,6 +2004,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 SizedBox(width: 14),
                                 Expanded(
                                     child: Text('My playlists',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w600))),
+                                Icon(Icons.chevron_right_rounded,
+                                    size: 19, color: _gold)
+                              ])),
+                        if (_savedPlaylists.any((p) =>
+                            p.kind == PlaylistKind.remoteM3u && !_protected(p)))
+                          const PopupMenuItem(
+                              value: 'refresh-all',
+                              height: 58,
+                              child: Row(children: [
+                                Icon(Icons.sync_rounded,
+                                    color: _gold, size: 23),
+                                SizedBox(width: 14),
+                                Expanded(
+                                    child: Text('Refresh all M3U playlists',
                                         maxLines: 1,
                                         overflow: TextOverflow.ellipsis,
                                         style: TextStyle(
@@ -2120,7 +2274,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 ),
           bottomNavigationBar: !mobileLandscape && size.width < 700
               ? NavigationBar(
-                  height: 74,
+                  height: 68,
+                  labelBehavior: size.width < 380
+                      ? NavigationDestinationLabelBehavior.onlyShowSelected
+                      : NavigationDestinationLabelBehavior.alwaysShow,
                   backgroundColor: Theme.of(context).scaffoldBackgroundColor,
                   indicatorColor: _gold.withValues(alpha: .16),
                   selectedIndex: _navIndex,
@@ -2130,23 +2287,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         selectedIcon: Icon(Icons.home_rounded),
                         label: 'Home'),
                     NavigationDestination(
-                        icon: Icon(Icons.add_circle_outline_rounded),
-                        label: 'Import'),
-                    NavigationDestination(
                         icon: Icon(Icons.live_tv_outlined),
                         selectedIcon: Icon(Icons.live_tv_rounded),
                         label: 'Channels'),
+                    NavigationDestination(
+                        icon: Icon(Icons.calendar_month_outlined),
+                        selectedIcon: Icon(Icons.calendar_month_rounded),
+                        label: 'Guide'),
+                    NavigationDestination(
+                        icon: Icon(Icons.video_library_outlined),
+                        selectedIcon: Icon(Icons.video_library_rounded),
+                        label: 'Library'),
+                    NavigationDestination(
+                        icon: Icon(Icons.add_circle_outline_rounded),
+                        selectedIcon: Icon(Icons.add_circle_rounded),
+                        label: 'Import'),
                   ],
-                  onDestinationSelected: (index) {
-                    if (index == 1) {
-                      _showImportOptions();
-                      return;
-                    }
-                    setState(() {
-                      _navIndex = index;
-                      _miniPlayer = index == 2 && _selected != null;
-                    });
-                  },
+                  onDestinationSelected: _changeWorkspace,
                 )
               : null,
           body: SafeArea(
@@ -2158,12 +2315,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               final gap = desktop ? 18.0 : 10.0;
               final pad = mobileLandscape ? 0.0 : (desktop ? 20.0 : 10.0);
               final sideWidth = tv ? 360.0 : 320.0;
-              final portraitPlayerHeight = (bounds.maxWidth * 9 / 16 + 64)
-                  .clamp(0.0, bounds.maxHeight * .52)
-                  .toDouble();
+              final portraitPlayerHeight =
+                  (bounds.maxWidth * 9 / 16 + (_selected == null ? 64 : 122))
+                      .clamp(0.0, bounds.maxHeight * .52)
+                      .toDouble();
               // Give the repositioned player a stable key so resizing into the
               // mini-player does not intentionally create a second decoder.
               // Actual native texture continuity must be verified on devices.
+              // Mobile portrait keeps the *same* PlayerView mounted in a fixed
+              // viewport. Only the browser/dashboard below it changes. This
+              // prevents playback being scrolled away or reopened on each tab.
+              if (!mobileLandscape &&
+                  !desktop &&
+                  size.width < 700 &&
+                  size.height >= size.width &&
+                  !_channelSheetOpen) {
+                final keyboardOpen =
+                    MediaQuery.viewInsetsOf(context).bottom > 0;
+                final playerHeight = keyboardOpen
+                    ? (bounds.maxHeight * .17).clamp(32.0, 72.0).toDouble()
+                    : (bounds.maxHeight * .37).clamp(126.0, 250.0).toDouble();
+                return Padding(
+                  padding: EdgeInsets.fromLTRB(pad, 3, pad, 0),
+                  child: Column(children: [
+                    SizedBox(
+                      key: const ValueKey('pinned-player-zone'),
+                      height: playerHeight,
+                      // Keep the portrait caption compact, but do not disable
+                      // the 2-second tap-to-show video controls. PlayerView's
+                      // compact flag is reserved for the floating mini-player.
+                      child:
+                          _content(tv, compact: true, showPlayerControls: true),
+                    ),
+                    if (!keyboardOpen) _pinnedNowPlaying(),
+                    const SizedBox(height: 7),
+                    Expanded(
+                        child: KeyedSubtree(
+                      key: ValueKey<int>(_navIndex),
+                      child: _workspaceBody(visible, tv),
+                    )),
+                  ]),
+                );
+              }
               return Stack(children: [
                 if (!mobileLandscape && !_channelSheetOpen)
                   Positioned(
@@ -2176,7 +2369,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ? pad
                         : (desktop ? pad : pad + portraitPlayerHeight + gap),
                     bottom: pad,
-                    child: _sidebar(visible, tv, mini: mini),
+                    child: desktop
+                        ? _desktopWorkspace(visible, tv)
+                        : _sidebar(visible, tv, mini: mini),
                   ),
                 if (!channelBrowserOnly)
                   Positioned(
@@ -2334,7 +2529,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _content(bool tv, {bool immersive = false, bool compact = false}) =>
+  Widget _content(
+    bool tv, {
+    bool immersive = false,
+    bool compact = false,
+    bool showPlayerControls = false,
+  }) =>
       LayoutBuilder(builder: (context, constraints) {
         return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2389,13 +2589,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ? Row(children: [
                                     Expanded(
                                         child: PlayerView(
-                                            key: const ValueKey(
-                                                'sanseth-multiview-primary'),
+                                            key: _primaryPlayerKey,
                                             channel: _selected!,
                                             onPlaybackHealth:
                                                 _onPlaybackHealth)),
                                     const VerticalDivider(
-                                        width: 3, color: Color(0xFFF4C65B)),
+                                        width: 3, color: Color(0xFFF5C75C)),
                                     Expanded(
                                         child: PlayerView(
                                             key: const ValueKey(
@@ -2407,11 +2606,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                                 _onPlaybackHealth)),
                                   ])
                                 : PlayerView(
-                                    key: const ValueKey(
-                                        'sanseth-primary-player'),
+                                    key: _primaryPlayerKey,
                                     channel: _selected!,
                                     onPlaybackHealth: _onPlaybackHealth,
-                                    compact: compact,
+                                    // A fixed portrait video is not the floating mini-player:
+                                    // show its interactive overlay while keeping its caption
+                                    // area compact. The PlayerView owns the existing 2s timer.
+                                    compact: compact && !showPlayerControls,
                                     onControlsInteraction:
                                         _revealLandscapeControls,
                                     onExitFullscreen: () => setState(() {
@@ -2456,55 +2657,101 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
               if (!immersive && !compact) ...[
                 const SizedBox(height: 8),
-                Row(children: [
+                // A compact left-aligned vertical action rail keeps channel title,
+                // playlist name and category readable without a row of trailing icons.
+                Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                  if (_selected != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF15253B),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFF42638D)),
+                        ),
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                          if (_multiviewSecondary == null && !_miniPlayer)
+                            IconButton(
+                              key: const Key('minimize_player'),
+                              tooltip: 'Minimize player and browse channels',
+                              onPressed: () => setState(() {
+                                _miniPlayer = false;
+                                _navIndex = 1;
+                              }),
+                              icon: const Icon(
+                                  Icons.picture_in_picture_alt_rounded,
+                                  color: _gold),
+                              constraints: const BoxConstraints(
+                                  minWidth: 44, minHeight: 36),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          IconButton(
+                            tooltip: _multiviewSecondary == null
+                                ? 'Open 2-channel multiview'
+                                : 'Close multiview',
+                            onPressed: _multiviewSecondary == null
+                                ? _chooseMultiview
+                                : () =>
+                                    setState(() => _multiviewSecondary = null),
+                            icon: Icon(
+                                _multiviewSecondary == null
+                                    ? Icons.view_week_outlined
+                                    : Icons.close_fullscreen,
+                                color: _gold),
+                            constraints: const BoxConstraints(
+                                minWidth: 44, minHeight: 36),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          IconButton(
+                            tooltip: 'Toggle favorite',
+                            onPressed: () => _toggleFavorite(_selected!),
+                            icon: Icon(
+                                _favorites.contains(FavoriteStore.identifier(
+                                        _selected!.url))
+                                    ? Icons.star_rounded
+                                    : Icons.star_border_rounded,
+                                color: _gold),
+                            constraints: const BoxConstraints(
+                                minWidth: 44, minHeight: 36),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ]),
+                      ),
+                    ),
                   Expanded(
-                      child: Text(_selected?.name ?? 'SanSeth Play',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                              fontSize: tv ? 28 : 20,
-                              fontWeight: FontWeight.w800))),
-                  if (_selected != null &&
-                      _multiviewSecondary == null &&
-                      !_miniPlayer)
-                    IconButton(
-                        key: const Key('minimize_player'),
-                        tooltip: 'Minimize player and browse channels',
-                        onPressed: () => setState(() {
-                              _miniPlayer = true;
-                              _navIndex = 2;
-                            }),
-                        icon: const Icon(Icons.picture_in_picture_alt_rounded,
-                            color: _gold)),
-                  if (_selected != null)
-                    IconButton(
-                        tooltip: _multiviewSecondary == null
-                            ? 'Open 2-channel multiview'
-                            : 'Close multiview',
-                        onPressed: _multiviewSecondary == null
-                            ? _chooseMultiview
-                            : () => setState(() => _multiviewSecondary = null),
-                        icon: Icon(
-                            _multiviewSecondary == null
-                                ? Icons.view_week_outlined
-                                : Icons.close_fullscreen,
-                            color: _gold)),
-                  if (_selected != null)
-                    IconButton(
-                        tooltip: 'Toggle favorite',
-                        onPressed: () => _toggleFavorite(_selected!),
-                        icon: Icon(
-                            _favorites.contains(
-                                    FavoriteStore.identifier(_selected!.url))
-                                ? Icons.star_rounded
-                                : Icons.star_border_rounded,
-                            color: _gold)),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                        if (_selected != null)
+                          const Text('● NOW PLAYING',
+                              style: TextStyle(
+                                  color: _gold,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 1.4)),
+                        Text(_selected?.name ?? 'SanSeth Play',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: tv ? 24 : 18,
+                                fontWeight: FontWeight.w800)),
+                        Text(_activePlaylistName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: _gold,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600)),
+                        Text(
+                            _selected?.group ?? 'LIVE TV  •  MOVIES  •  SERIES',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 11)),
+                      ])),
                 ]),
-                Text(_selected?.group ?? 'LIVE TV  •  MOVIES  •  SERIES',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: _gold, fontSize: 11, letterSpacing: 1.1)),
                 if (_selected != null && _currentProgram(_selected!) != null)
                   Text('NOW: ${_currentProgram(_selected!)!.title}',
                       maxLines: 1,
@@ -2552,376 +2799,892 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     ));
   }
 
-  Widget _sidebar(List<StreamChannel> visible, bool tv, {bool mini = false}) =>
-      Container(
-        decoration: BoxDecoration(
-            color: _panel,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: const Color(0xFF31547D))),
-        child: LayoutBuilder(
-            builder: (context, sidebarBounds) => Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-                          child: Row(children: [
-                            const Expanded(
-                                child: Text('CHANNELS',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.w800,
-                                        letterSpacing: 1.3))),
-                            Text('${visible.length}',
-                                style: const TextStyle(color: _gold)),
-                          ])),
-                      if (sidebarBounds.maxHeight >= 300)
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: (sidebarBounds.maxHeight * .47)
-                                .clamp(24.0, 240.0)
-                                .toDouble(),
+  String get _activePlaylistName {
+    for (final playlist in _savedPlaylists) {
+      if (playlist.id == _activePlaylistId) return playlist.name;
+    }
+    return 'No playlist selected';
+  }
+
+  // Navigation alters only the workspace; the mounted player is shared.
+  void _changeWorkspace(int index) {
+    if (index < 0 || index > 4 || !mounted) {
+      return;
+    }
+    if (_searchFocus.hasFocus) {
+      _searchFocus.unfocus();
+    }
+    setState(() {
+      _navIndex = index;
+      _miniPlayer = false;
+    });
+  }
+
+  Widget _pinnedNowPlaying() => Material(
+        color: const Color(0xFF0C2038),
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _changeWorkspace(0),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Row(children: [
+              const Icon(Icons.live_tv_rounded, color: _gold, size: 21),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                    Text(_selected?.name ?? 'Ready to play',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 13)),
+                    Text(_activePlaylistName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _gold, fontSize: 11)),
+                  ])),
+              if (_selected != null)
+                IconButton(
+                  key: const Key('pinned-player-favorite'),
+                  tooltip: 'Toggle favorite',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(
+                      _favorites.contains(
+                              FavoriteStore.identifier(_selected!.url))
+                          ? Icons.star_rounded
+                          : Icons.star_outline_rounded,
+                      color: _gold),
+                  onPressed: () => _toggleFavorite(_selected!),
+                ),
+            ]),
+          ),
+        ),
+      );
+
+  Widget _workspaceBody(List<StreamChannel> visible, bool tv) {
+    switch (_navIndex) {
+      case 1:
+        return MediaQuery.sizeOf(context).width < 700 && !tv
+            ? _mobileChannelsWorkspace(visible)
+            : _sidebar(visible, tv);
+      case 2:
+        return _guideWorkspace();
+      case 3:
+        return _libraryWorkspace();
+      case 4:
+        return _importWorkspace();
+      default:
+        return _homeWorkspace(visible);
+    }
+  }
+
+  // Mobile-first channel workspace. The video remains in the pinned zone above
+  // this widget, while controls and the catalog scroll independently below.
+  // Only the short quick-tune strip is eager; the complete catalog stays lazy.
+  Widget _mobileChannelsWorkspace(List<StreamChannel> visible) {
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final counts = ChannelCategories.counts(_channels);
+    final buttonText =
+        _group == ChannelCategories.all ? 'All categories' : _group;
+    return Container(
+      key: const ValueKey('mobile-channel-workspace'),
+      decoration: BoxDecoration(
+        color: const Color(0xFF081A2E),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF365475)),
+      ),
+      child: Column(children: [
+        Expanded(
+            child: CustomScrollView(
+          key: const PageStorageKey<String>('sanseth-mobile-channels-scroll'),
+          slivers: [
+            SliverToBoxAdapter(
+                child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(children: [
+                    const Expanded(
+                        child: Text('CHANNELS',
+                            style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 1))),
+                    Text('${visible.length} / ${_channels.length}',
+                        style: const TextStyle(
+                            color: _gold, fontWeight: FontWeight.w800)),
+                  ]),
+                  const SizedBox(height: 3),
+                  Text('Active Playlist: $_activePlaylistName',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          const TextStyle(color: Colors.white70, fontSize: 12)),
+                  const SizedBox(height: 9),
+                  TextField(
+                    focusNode: _searchFocus,
+                    controller: _search,
+                    onChanged: (text) {
+                      _searchDebounce?.cancel();
+                      _searchDebounce =
+                          Timer(const Duration(milliseconds: 140), () {
+                        if (mounted) {
+                          setState(() => _query = text.trim().toLowerCase());
+                        }
+                      });
+                    },
+                    decoration: InputDecoration(
+                      prefixIcon: const Icon(Icons.search_rounded),
+                      hintText: 'Search channels',
+                      isDense: true,
+                      suffixIcon: IconButton(
+                        tooltip:
+                            'Show or hide temporarily unavailable channels',
+                        icon: Icon(_hideUnavailable
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined),
+                        onPressed: () => setState(
+                            () => _hideUnavailable = !_hideUnavailable),
+                      ),
+                    ),
+                  ),
+                  if (!keyboardOpen) ...[
+                    const SizedBox(height: 8),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(children: [
+                        SizedBox(
+                            width: 177,
+                            child: OutlinedButton.icon(
+                              onPressed: _savedPlaylists.isEmpty
+                                  ? _addPlaylist
+                                  : _browseSavedPlaylists,
+                              icon: const Icon(Icons.video_library_outlined,
+                                  size: 17),
+                              label: Text(_activePlaylistName,
+                                  maxLines: 1, overflow: TextOverflow.ellipsis),
+                            )),
+                        const SizedBox(width: 7),
+                        SizedBox(
+                            width: 173,
+                            child: OutlinedButton.icon(
+                              onPressed:
+                                  _channels.isEmpty ? null : _browseCategories,
+                              icon:
+                                  const Icon(Icons.category_outlined, size: 17),
+                              label: Text(
+                                  '$buttonText (${counts[_group] ?? _channels.length})',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            )),
+                      ]),
+                    ),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(children: [
+                        ChoiceChip(
+                            label: const Text('All'),
+                            selected: _filter == ChannelFilter.all,
+                            onSelected: (_) =>
+                                setState(() => _filter = ChannelFilter.all)),
+                        const SizedBox(width: 7),
+                        ChoiceChip(
+                            label: const Text('Favorites'),
+                            selected: _filter == ChannelFilter.favorites,
+                            onSelected: (_) => setState(
+                                () => _filter = ChannelFilter.favorites)),
+                        const SizedBox(width: 7),
+                        ChoiceChip(
+                            label: const Text('Recent'),
+                            selected: _filter == ChannelFilter.recent,
+                            onSelected: (_) =>
+                                setState(() => _filter = ChannelFilter.recent)),
+                        const SizedBox(width: 7),
+                        ActionChip(
+                            label: const Text('Guide'),
+                            onPressed: () => _changeWorkspace(2)),
+                      ]),
+                    ),
+                  ],
+                ],
+              ),
+            )),
+            if (visible.isEmpty)
+              SliverToBoxAdapter(
+                  child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(children: [
+                  Text(
+                      _channels.isEmpty
+                          ? 'No channels yet. Import a playlist to get started.'
+                          : 'No matching channels. Try another category or filter.',
+                      textAlign: TextAlign.center),
+                  if (_channels.isEmpty) ...[
+                    const SizedBox(height: 12),
+                    _importCard('Import M3U URL', Icons.link_rounded,
+                        'Use your authorized playlist', 'playlist'),
+                    _importCard('Direct stream', Icons.live_tv_rounded,
+                        'Paste a supported video URL', 'direct'),
+                  ],
+                ]),
+              )),
+            if (visible.isNotEmpty)
+              SliverList.builder(
+                itemCount: visible.length,
+                itemBuilder: (context, index) {
+                  final channel = visible[index];
+                  final playing = channel.url == _selected?.url;
+                  final favorite = _favorites
+                      .contains(FavoriteStore.identifier(channel.url));
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 0, 10, 7),
+                    child: Material(
+                      color: playing
+                          ? _gold.withValues(alpha: .15)
+                          : const Color(0xFF112841),
+                      borderRadius: BorderRadius.circular(15),
+                      child: ListTile(
+                        key: ValueKey<String>('channel-${channel.url}'),
+                        onTap: () => _select(channel),
+                        leading: Icon(Icons.live_tv_rounded,
+                            color: playing ? _gold : Colors.white70),
+                        title: Text(channel.name,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w700)),
+                        subtitle: Text(channel.group,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        trailing: IconButton(
+                          tooltip:
+                              favorite ? 'Remove favorite' : 'Add favorite',
+                          onPressed: () => _toggleFavorite(channel),
+                          icon: Icon(
+                              favorite
+                                  ? Icons.star_rounded
+                                  : Icons.star_outline_rounded,
+                              color: favorite ? _gold : Colors.white60),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            const SliverToBoxAdapter(child: SizedBox(height: 12)),
+          ],
+        )),
+        if (!keyboardOpen) ...[
+          const Divider(height: 1, color: Color(0xFF355273)),
+          SizedBox(
+            height: 82,
+            child: visible.isEmpty
+                ? Center(
+                    child: TextButton.icon(
+                    onPressed: _channels.isEmpty
+                        ? _addPlaylist
+                        : () => _openChannelFilter(ChannelFilter.all),
+                    icon: const Icon(Icons.playlist_add_rounded),
+                    label: Text(_channels.isEmpty
+                        ? 'Add a playlist'
+                        : 'Show all channels'),
+                  ))
+                : ListView.builder(
+                    key: const PageStorageKey<String>('sanseth-quick-tune'),
+                    scrollDirection: Axis.horizontal,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 9, vertical: 9),
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final channel = visible[index];
+                      final playing = channel.url == _selected?.url;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 9),
+                        child: SizedBox(
+                          width: 174,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _select(channel),
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: playing
+                                  ? _gold.withValues(alpha: .2)
+                                  : const Color(0xFF142C47),
+                              side: BorderSide(
+                                  color: playing
+                                      ? _gold
+                                      : const Color(0xFF466080)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(15)),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 10),
+                            ),
+                            icon: Icon(
+                                playing
+                                    ? Icons.volume_up_rounded
+                                    : Icons.play_circle_outline_rounded,
+                                size: 21),
+                            label: Text(channel.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.left),
                           ),
-                          child: SingleChildScrollView(
-                              child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(10, 0, 10, 8),
-                                child: Row(children: [
-                                  Expanded(
-                                      child: OutlinedButton.icon(
-                                    onPressed: _savedPlaylists.isEmpty
-                                        ? _addPlaylist
-                                        : _browseSavedPlaylists,
-                                    icon: const Icon(
-                                        Icons.video_library_outlined,
-                                        size: 17),
-                                    label: Text(
-                                        'Playlists (${_savedPlaylists.where((p) => !_hidden(p)).length})',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 11)),
-                                  )),
-                                  const SizedBox(width: 6),
-                                  IconButton.outlined(
-                                    tooltip: 'TV guide',
-                                    onPressed: _showTvGuide,
-                                    icon: const Icon(
-                                        Icons.calendar_month_outlined,
-                                        size: 19),
-                                  ),
-                                  const SizedBox(width: 4),
-                                  IconButton.outlined(
-                                    tooltip: 'Recordings',
-                                    onPressed: () => showDialog<void>(
-                                        context: context,
-                                        builder: (_) =>
-                                            RecordingsDialog(onPlay: (channel) {
-                                              if (_activePlaylistId == null ||
-                                                  _savedPlaylists.any((p) =>
-                                                      p.id ==
-                                                          _activePlaylistId &&
-                                                      _canOpen(p))) {
-                                                _select(channel);
-                                              }
-                                            })),
-                                    icon: const Icon(
-                                        Icons.video_collection_outlined,
-                                        size: 19),
-                                  ),
-                                ]),
-                              ),
-                              Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10),
-                                  child: TextField(
-                                    focusNode: _searchFocus,
-                                    controller: _search,
-                                    onChanged: (text) {
-                                      _searchDebounce?.cancel();
-                                      _searchDebounce = Timer(
-                                          const Duration(milliseconds: 140),
-                                          () {
-                                        if (mounted) {
-                                          setState(() => _query =
-                                              text.trim().toLowerCase());
-                                        }
-                                      });
-                                    },
-                                    decoration: const InputDecoration(
-                                        prefixIcon: Icon(Icons.search),
-                                        hintText: 'Search channels',
-                                        isDense: true),
-                                  )),
-                              Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 5),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // Wide-screen variant: separate the navigation from the full channel list.
+  // The player remains in the original persistent right-hand pane.
+  Widget _desktopWorkspace(List<StreamChannel> visible, bool tv) =>
+      Column(children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(children: [
+            for (final entry in <(int, IconData, String)>[
+              (0, Icons.home_rounded, 'Home'),
+              (1, Icons.live_tv_rounded, 'Channels'),
+              (2, Icons.calendar_month_rounded, 'Guide'),
+              (3, Icons.video_library_rounded, 'Library'),
+              (4, Icons.add_circle_outline, 'Import'),
+            ])
+              Padding(
+                  padding: const EdgeInsets.only(right: 3),
+                  child: IconButton(
+                    tooltip: entry.$3,
+                    isSelected: _navIndex == entry.$1,
+                    icon: Icon(entry.$2,
+                        color: _navIndex == entry.$1 ? _gold : Colors.white70),
+                    onPressed: () => _changeWorkspace(entry.$1),
+                  )),
+          ]),
+        ),
+        Expanded(child: _workspaceBody(visible, tv)),
+      ]);
+
+  Widget _workspaceAction(IconData icon, String label, VoidCallback? action,
+          {String? subtitle}) =>
+      Card(
+        margin: const EdgeInsets.only(bottom: 9),
+        child: ListTile(
+          leading: Icon(icon, color: _gold, size: 25),
+          title: Text(label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          subtitle: subtitle == null
+              ? null
+              : Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: action,
+        ),
+      );
+
+  void _openChannelFilter(ChannelFilter filter) {
+    setState(() {
+      _filter = filter;
+      _navIndex = 1;
+    });
+  }
+
+  Widget _homeWorkspace(List<StreamChannel> visible) {
+    final savedCount = _savedPlaylists.where((p) => !_hidden(p)).length;
+    // Dashboard has only a handful of quick actions. Eagerly mount them so
+    // filter chips stay discoverable in short 320x568 viewports even before
+    // they are scrolled into view. The 50,000+ Channels list stays lazy.
+    return SingleChildScrollView(
+      key: const PageStorageKey<String>('sanseth-home-dashboard'),
+      padding: const EdgeInsets.fromLTRB(5, 8, 5, 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('YOUR ENTERTAINMENT',
+              style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 1.1)),
+          Text(
+              _selected == null
+                  ? 'Choose a channel to start watching'
+                  : 'Player stays visible while you browse',
+              style: const TextStyle(fontSize: 12, color: Colors.white70)),
+          const SizedBox(height: 12),
+          _workspaceAction(
+              Icons.live_tv_rounded, 'CHANNELS', () => _changeWorkspace(1),
+              subtitle:
+                  'Browse ${visible.length} of ${_channels.length} channels'),
+          _workspaceAction(
+              Icons.video_library_outlined,
+              'Playlists ($savedCount)',
+              _savedPlaylists.isEmpty ? _addPlaylist : _browseSavedPlaylists,
+              subtitle: 'Active: $_activePlaylistName'),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            ActionChip(
+                label: const Text('All'),
+                avatar: const Icon(Icons.grid_view_rounded, size: 16),
+                onPressed: () => _openChannelFilter(ChannelFilter.all)),
+            ActionChip(
+                label: const Text('Favorites'),
+                avatar: const Icon(Icons.star_border_rounded, size: 16),
+                onPressed: () => _openChannelFilter(ChannelFilter.favorites)),
+            ActionChip(
+                label: const Text('Recent'),
+                avatar: const Icon(Icons.history_rounded, size: 16),
+                onPressed: () => _openChannelFilter(ChannelFilter.recent)),
+            ActionChip(
+                label: const Text('Guide'),
+                avatar: const Icon(Icons.calendar_month_rounded, size: 16),
+                onPressed: () => _changeWorkspace(2)),
+          ]),
+          const SizedBox(height: 10),
+          Text('QUICK TUNE  ·  $_activePlaylistName',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  const TextStyle(color: _gold, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 7),
+          if (visible.isEmpty)
+            const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text('Import a playlist or open Channels to browse.')),
+          // Large horizontal channel buttons keep the Home dashboard airy.
+          // Full playlists are rendered lazily on the Channels tab instead.
+          if (visible.isNotEmpty)
+            SizedBox(
+                height: 90,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: visible.length > 20 ? 20 : visible.length,
+                  itemBuilder: (context, index) {
+                    final channel = visible[index];
+                    final playing = channel.url == _selected?.url;
+                    return Padding(
+                      padding:
+                          const EdgeInsets.only(right: 9, top: 6, bottom: 6),
+                      child: SizedBox(
+                          width: 187,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _select(channel),
+                            icon: Icon(playing
+                                ? Icons.volume_up_rounded
+                                : Icons.play_circle_outline_rounded),
+                            label: Text(channel.name,
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: playing
+                                  ? _gold.withValues(alpha: .18)
+                                  : const Color(0xFF142D49),
+                              side: BorderSide(
+                                  color: playing
+                                      ? _gold
+                                      : const Color(0xFF476689)),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16)),
+                            ),
+                          )),
+                    );
+                  },
+                )),
+        ],
+      ),
+    );
+  }
+
+  Widget _guideWorkspace() => ListView(
+        padding: const EdgeInsets.all(8),
+        children: [
+          const Text('TV GUIDE',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 5),
+          const Text('Programs, catch-up and XMLTV schedule',
+              style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 14),
+          _workspaceAction(
+              Icons.view_timeline_outlined, 'Open full TV Guide', _showTvGuide,
+              subtitle: 'Browse schedule for your channels'),
+          _workspaceAction(Icons.link_rounded, 'Load XMLTV URL', _loadEpg,
+              subtitle: 'Use your authorized EPG source'),
+          _workspaceAction(Icons.refresh_rounded, 'Refresh EPG',
+              _epgSource == null ? null : _refreshEpg),
+          if (_epgMessage != null)
+            Text(_epgMessage!, style: const TextStyle(color: _gold)),
+        ],
+      );
+
+  Widget _libraryWorkspace() => ListView(
+        padding: const EdgeInsets.all(8),
+        children: [
+          const Text('MY LIBRARY',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 5),
+          const Text('Favorites, recently watched and recordings',
+              style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 14),
+          _workspaceAction(Icons.star_outline_rounded, 'Favorites',
+              () => _openChannelFilter(ChannelFilter.favorites)),
+          _workspaceAction(Icons.history_rounded, 'Recent',
+              () => _openChannelFilter(ChannelFilter.recent)),
+          _workspaceAction(
+              Icons.video_collection_outlined,
+              'Recordings',
+              () => showDialog<void>(
+                  context: context,
+                  builder: (_) => RecordingsDialog(onPlay: (channel) {
+                        if (_activePlaylistId == null ||
+                            _savedPlaylists.any((p) =>
+                                p.id == _activePlaylistId && _canOpen(p))) {
+                          _select(channel);
+                        }
+                      }))),
+          _workspaceAction(Icons.video_library_outlined, 'My playlists',
+              _savedPlaylists.isEmpty ? _addPlaylist : _browseSavedPlaylists),
+        ],
+      );
+
+  Widget _importWorkspace() => ListView(
+        padding: const EdgeInsets.all(8),
+        children: [
+          const Text('ADD CONTENT',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 5),
+          const Text('Your playlists and authorized sources; no login required',
+              style: TextStyle(color: Colors.white70)),
+          const SizedBox(height: 14),
+          _importCard('Import M3U URL', Icons.link_rounded,
+              'GitHub or public/authorized playlist', 'playlist'),
+          _importCard('Direct live stream', Icons.live_tv_rounded,
+              'Open a supported HTTP(S) video URL', 'direct'),
+          _importCard('Paste M3U text', Icons.paste_rounded,
+              'Import text as a temporary playlist', 'text'),
+          _workspaceAction(
+              Icons.dns_outlined, 'Xtream provider (optional)', _openProvider,
+              subtitle: 'Only with an authorized provider account'),
+        ],
+      );
+
+  // channel rows remain lazily built, even for very large M3U catalogs.
+  Widget _sidebar(List<StreamChannel> visible, bool tv, {bool mini = false}) {
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final playlistCount = _savedPlaylists.where((p) => !_hidden(p)).length;
+    final count = ChannelCategories.counts(_channels);
+    final railWidth = tv ? 112.0 : 82.0;
+    Widget railAction(IconData icon, String label, VoidCallback? action,
+            {bool active = false}) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: 7),
+          child: Material(
+            color:
+                active ? _gold.withValues(alpha: .19) : const Color(0xFF11233A),
+            borderRadius: BorderRadius.circular(15),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(15),
+              onTap: action,
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 3),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(
+                      color: active ? _gold : const Color(0xFF365477)),
+                ),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(icon,
+                      color: active ? _gold : Colors.white70,
+                      size: tv ? 25 : 21),
+                  const SizedBox(height: 3),
+                  Text(label,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: tv ? 12 : 10,
+                          color: active ? _gold : Colors.white,
+                          fontWeight:
+                              active ? FontWeight.w700 : FontWeight.w500)),
+                ]),
+              ),
+            ),
+          ),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+          gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF122841), Color(0xFF07182D)]),
+          borderRadius: BorderRadius.circular(25),
+          border: Border.all(color: const Color(0xFF42638D))),
+      child: Padding(
+        padding: const EdgeInsets.all(11),
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (!keyboardOpen)
+            Row(children: [
+              const Expanded(
+                  child: Text('CHANNELS',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.3))),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(22),
+                    color: const Color(0xFF142D49),
+                    border: Border.all(color: const Color(0xFFAA8A4D))),
+                child: Text('${visible.length} / ${_channels.length}',
+                    style: const TextStyle(
+                        color: _gold, fontWeight: FontWeight.w700)),
+              ),
+            ]),
+          if (!keyboardOpen)
+            Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 10),
+                child: Text('Active Playlist: $_activePlaylistName',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        const TextStyle(color: Colors.white70, fontSize: 12))),
+          Expanded(
+              child:
+                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+                width: railWidth,
+                // Only seven navigation controls: keep every destination mounted
+                // even when the narrow mobile viewport can show only the first
+                // few. The rail remains independently scrollable, while the
+                // potentially 50,000+ channel list stays lazily built.
+                child: SingleChildScrollView(
+                    child: Column(children: [
+                  railAction(
+                      Icons.video_library_outlined,
+                      'Playlists ($playlistCount)',
+                      _savedPlaylists.isEmpty
+                          ? _addPlaylist
+                          : _browseSavedPlaylists),
+                  railAction(Icons.category_outlined, 'Categories',
+                      _channels.isEmpty ? null : _browseCategories),
+                  railAction(Icons.grid_view_rounded, 'All',
+                      () => setState(() => _filter = ChannelFilter.all),
+                      active: _filter == ChannelFilter.all),
+                  railAction(Icons.star_outline_rounded, 'Favorites',
+                      () => setState(() => _filter = ChannelFilter.favorites),
+                      active: _filter == ChannelFilter.favorites),
+                  railAction(Icons.history_rounded, 'Recent',
+                      () => setState(() => _filter = ChannelFilter.recent),
+                      active: _filter == ChannelFilter.recent),
+                  railAction(
+                      Icons.calendar_month_outlined, 'EPG', _showTvGuide),
+                  railAction(
+                      Icons.video_collection_outlined,
+                      'Recordings',
+                      () => showDialog<void>(
+                          context: context,
+                          builder: (_) => RecordingsDialog(onPlay: (channel) {
+                                if (_activePlaylistId == null ||
+                                    _savedPlaylists.any((p) =>
+                                        p.id == _activePlaylistId &&
+                                        _canOpen(p))) {
+                                  _select(channel);
+                                }
+                              }))),
+                ]))),
+            const SizedBox(width: 9),
+            Expanded(
+                child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  focusNode: _searchFocus,
+                  controller: _search,
+                  onChanged: (text) {
+                    _searchDebounce?.cancel();
+                    _searchDebounce =
+                        Timer(const Duration(milliseconds: 140), () {
+                      if (mounted) {
+                        setState(() => _query = text.trim().toLowerCase());
+                      }
+                    });
+                  },
+                  decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search_rounded),
+                      hintText: 'Search channels',
+                      isDense: true),
+                ),
+                if (!keyboardOpen) const SizedBox(height: 8),
+                if (!keyboardOpen)
+                  OutlinedButton.icon(
+                    onPressed: _channels.isEmpty ? null : _browseCategories,
+                    icon: const Icon(Icons.category_outlined, size: 17),
+                    label: Text(
+                        _group == ChannelCategories.all
+                            ? 'All categories (${_channels.length})'
+                            : '$_group (${count[_group] ?? 0})',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11)),
+                  ),
+                if (!keyboardOpen)
+                  Row(children: [
+                    Expanded(
+                        child: Text(
+                            _hideUnavailable
+                                ? 'Hide failed (temporary)'
+                                : 'Show all channels',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 10, color: Colors.white70))),
+                    Switch.adaptive(
+                        key: const Key('hide_unavailable_channels'),
+                        value: _hideUnavailable,
+                        onChanged: (value) =>
+                            setState(() => _hideUnavailable = value)),
+                    IconButton(
+                        tooltip: 'Recheck channels in background',
+                        icon: const Icon(Icons.sync_rounded, size: 19),
+                        onPressed: () {
+                          _healthScanner.clear();
+                          _scanCursor = 0;
+                          _enqueueHealthBatch();
+                        }),
+                  ]),
+                Expanded(
+                    child: visible.isEmpty
+                        ? _channels.isEmpty
+                            ? ListView(children: [
+                                _importCard(
+                                    'Import M3U URL',
+                                    Icons.link_rounded,
+                                    'GitHub or provider playlist',
+                                    'playlist'),
+                                _importCard(
+                                    'Direct live stream',
+                                    Icons.live_tv_rounded,
+                                    'Paste a compatible stream',
+                                    'direct'),
+                                _importCard(
+                                    'Paste M3U text',
+                                    Icons.paste_rounded,
+                                    'Use a temporary list',
+                                    'text'),
+                              ])
+                            : const Center(
+                                child: Text('No matching channels.',
+                                    textAlign: TextAlign.center))
+                        : ListView.builder(
+                            key: const PageStorageKey<String>(
+                                'sanseth-channel-list'),
+                            padding: EdgeInsets.only(bottom: mini ? 150 : 6),
+                            itemCount: visible.length,
+                            itemExtent: tv ? 94 : 83,
+                            itemBuilder: (context, index) {
+                              final channel = visible[index];
+                              final selected = channel.url == _selected?.url;
+                              final favorite = _favorites.contains(
+                                  FavoriteStore.identifier(channel.url));
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 7),
+                                child: Material(
+                                  color: selected
+                                      ? _gold.withValues(alpha: .15)
+                                      : const Color(0xFF11263F),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(17),
+                                      side: BorderSide(
+                                          color: selected
+                                              ? _gold
+                                              : const Color(0xFF426186))),
                                   child: Row(children: [
                                     Expanded(
-                                        child: OutlinedButton.icon(
-                                      onPressed: _channels.isEmpty
-                                          ? null
-                                          : _browseCategories,
-                                      icon: const Icon(Icons.category_outlined,
-                                          size: 18),
-                                      label: Text(
-                                          _group == ChannelCategories.all
-                                              ? 'All categories (${_channels.length})'
-                                              : '$_group (${ChannelCategories.counts(_channels)[_group] ?? 0})',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis),
-                                    )),
-                                    if (_filter == ChannelFilter.recent &&
-                                        _recentHashes.isNotEmpty)
-                                      IconButton(
-                                          tooltip: 'Clear recent history',
-                                          onPressed: _clearRecent,
-                                          icon: const Icon(
-                                              Icons.delete_sweep_outlined)),
-                                  ])),
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(10, 0, 10, 5),
-                                child: Row(children: [
-                                  for (final option
-                                      in <(ChannelFilter, String, IconData)>[
-                                    (
-                                      ChannelFilter.all,
-                                      'All',
-                                      Icons.grid_view_rounded
-                                    ),
-                                    (
-                                      ChannelFilter.favorites,
-                                      'Favorites',
-                                      Icons.star_outline_rounded
-                                    ),
-                                    (
-                                      ChannelFilter.recent,
-                                      'Recent',
-                                      Icons.history_rounded
-                                    ),
-                                  ])
-                                    Expanded(
-                                        child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 2),
-                                      child: ChoiceChip(
-                                        showCheckmark: false,
-                                        avatar: Icon(option.$3,
-                                            size: 15,
-                                            color: _filter == option.$1
-                                                ? const Color(0xFF17140B)
-                                                : _gold),
-                                        label: Text(option.$2,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style:
-                                                const TextStyle(fontSize: 11)),
-                                        selected: _filter == option.$1,
-                                        onSelected: (_) =>
-                                            setState(() => _filter = option.$1),
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                    )),
-                                ]),
-                              ),
-                            ],
-                          )),
-                        ),
-                      if (sidebarBounds.maxHeight >= 300)
-                        Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Row(children: [
-                              Expanded(
-                                  child: Text(
-                                      _hideUnavailable
-                                          ? 'Hide confirmed unavailable • Others stay visible'
-                                          : 'Show all channels',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                          fontSize: 11,
-                                          color: Colors.white70))),
-                              Switch.adaptive(
-                                key: const Key('hide_unavailable_channels'),
-                                value: _hideUnavailable,
-                                onChanged: (value) =>
-                                    setState(() => _hideUnavailable = value),
-                              ),
-                              IconButton(
-                                tooltip: 'Recheck channels in background',
-                                icon: const Icon(Icons.sync_rounded, size: 20),
-                                onPressed: () {
-                                  _healthScanner.clear();
-                                  _scanCursor = 0;
-                                  _enqueueHealthBatch();
-                                },
-                              ),
-                            ])),
-                      Expanded(
-                          child: visible.isEmpty
-                              ? _channels.isEmpty
-                                  ? ListView(
-                                      padding: const EdgeInsets.fromLTRB(
-                                          10, 8, 10, 20),
-                                      children: [
-                                          const Padding(
-                                            padding: EdgeInsets.symmetric(
-                                                vertical: 10),
-                                            child: Text('Start watching',
-                                                style: TextStyle(
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 19)),
-                                          ),
-                                          _importCard(
-                                              'Import M3U URL',
-                                              Icons.link_rounded,
-                                              'GitHub or provider playlist',
-                                              'playlist'),
-                                          _importCard(
-                                              'Direct live stream',
-                                              Icons.live_tv_rounded,
-                                              'Paste a compatible stream',
-                                              'direct'),
-                                          _importCard(
-                                              'Paste M3U text',
-                                              Icons.paste_rounded,
-                                              'Use a temporary channel list',
-                                              'text'),
-                                          if (_savedPlaylists.isNotEmpty)
-                                            Card(
-                                                child: ListTile(
-                                              leading: const Icon(
-                                                  Icons.video_library_rounded,
-                                                  color: _gold),
-                                              title: const Text(
-                                                  'My saved playlists'),
-                                              trailing: const Icon(
-                                                  Icons.chevron_right_rounded),
-                                              onTap: _browseSavedPlaylists,
-                                            )),
-                                        ])
-                                  : const Center(
-                                      child: Padding(
-                                      padding: EdgeInsets.all(14),
-                                      child: Text('No matching channels.',
-                                          textAlign: TextAlign.center),
-                                    ))
-                              : ListView.builder(
-                                  padding:
-                                      EdgeInsets.only(bottom: mini ? 175 : 0),
-                                  itemCount: visible.length,
-                                  itemExtent: tv ? 88 : 76,
-                                  itemBuilder: (context, index) {
-                                    final channel = visible[index];
-                                    final selected =
-                                        channel.url == _selected?.url;
-                                    final favorite = _favorites.contains(
-                                        FavoriteStore.identifier(channel.url));
-                                    return Padding(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 6, vertical: 3),
-                                        child: Material(
-                                          color: selected
-                                              ? _gold.withValues(alpha: .13)
-                                              : const Color(0xFF102139),
-                                          borderRadius:
-                                              BorderRadius.circular(18),
-                                          child: Row(children: [
-                                            Expanded(
-                                                child: Focus(
-                                              onKeyEvent: (node, event) {
-                                                if (event is KeyDownEvent &&
-                                                    (event.logicalKey ==
-                                                            LogicalKeyboardKey
-                                                                .select ||
-                                                        event.logicalKey ==
-                                                            LogicalKeyboardKey
-                                                                .enter)) {
-                                                  _select(channel);
-                                                  return KeyEventResult.handled;
-                                                }
-                                                return KeyEventResult.ignored;
-                                              },
-                                              child: Builder(
-                                                  builder: (focusContext) {
-                                                final focused =
-                                                    Focus.of(focusContext)
-                                                        .hasFocus;
-                                                return Container(
-                                                    decoration: BoxDecoration(
-                                                        border: Border.all(
-                                                            color: focused
-                                                                ? _gold
-                                                                : Colors
-                                                                    .transparent,
-                                                            width: 2),
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(14)),
-                                                    child: ListTile(
-                                                      contentPadding:
-                                                          const EdgeInsets.only(
-                                                              left: 14,
-                                                              right: 3),
-                                                      dense: false,
-                                                      leading: Icon(
-                                                          Icons.live_tv_rounded,
-                                                          size: tv ? 27 : 23,
-                                                          color: selected
-                                                              ? _gold
-                                                              : Colors.white60),
-                                                      title: Text(channel.name,
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          style: TextStyle(
-                                                              fontSize:
-                                                                  tv ? 19 : 15,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700)),
-                                                      subtitle: Text(
-                                                          _currentProgram(
-                                                                      channel)
-                                                                  ?.title ??
-                                                              channel.group,
-                                                          maxLines: 1,
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                          style: const TextStyle(
-                                                              color: Colors
-                                                                  .white70,
-                                                              fontSize: 12)),
-                                                      onTap: () =>
-                                                          _select(channel),
-                                                    ));
-                                              }),
-                                            )),
-                                            IconButton(
-                                              tooltip: favorite
-                                                  ? 'Remove favorite'
-                                                  : 'Add favorite',
-                                              onPressed: () =>
-                                                  _toggleFavorite(channel),
-                                              icon: Icon(
-                                                  favorite
-                                                      ? Icons.star_rounded
-                                                      : Icons
-                                                          .star_border_rounded,
-                                                  size: 21,
-                                                  color: favorite
+                                        child: Focus(
+                                      onKeyEvent: (node, event) {
+                                        if (event is KeyDownEvent &&
+                                            (event.logicalKey ==
+                                                    LogicalKeyboardKey.select ||
+                                                event.logicalKey ==
+                                                    LogicalKeyboardKey.enter)) {
+                                          _select(channel);
+                                          return KeyEventResult.handled;
+                                        }
+                                        return KeyEventResult.ignored;
+                                      },
+                                      child: Builder(builder: (focusContext) {
+                                        final focused =
+                                            Focus.of(focusContext).hasFocus;
+                                        return Container(
+                                          decoration: BoxDecoration(
+                                              borderRadius:
+                                                  BorderRadius.circular(16),
+                                              border: Border.all(
+                                                  color: focused
                                                       ? _gold
-                                                      : Colors.white54),
-                                            ),
-                                          ]),
-                                        ));
-                                  },
-                                )),
-                    ])),
-      );
+                                                      : Colors.transparent,
+                                                  width: 2)),
+                                          child: ListTile(
+                                            dense: true,
+                                            contentPadding:
+                                                const EdgeInsets.only(left: 8),
+                                            leading: Icon(Icons.live_tv_rounded,
+                                                color: selected
+                                                    ? _gold
+                                                    : Colors.white70,
+                                                size: tv ? 26 : 22),
+                                            title: Text(channel.name,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                    fontSize: tv ? 17 : 13,
+                                                    fontWeight:
+                                                        FontWeight.w800)),
+                                            subtitle: Text(
+                                                _currentProgram(channel)
+                                                        ?.title ??
+                                                    channel.group,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                    fontSize: 11,
+                                                    color: Colors.white70)),
+                                            onTap: () => _select(channel),
+                                          ),
+                                        );
+                                      }),
+                                    )),
+                                    IconButton(
+                                      tooltip: favorite
+                                          ? 'Remove favorite'
+                                          : 'Add favorite',
+                                      onPressed: () => _toggleFavorite(channel),
+                                      icon: Icon(
+                                          favorite
+                                              ? Icons.star_rounded
+                                              : Icons.star_border_rounded,
+                                          color:
+                                              favorite ? _gold : Colors.white60,
+                                          size: 20),
+                                    ),
+                                  ]),
+                                ),
+                              );
+                            },
+                          )),
+              ],
+            )),
+          ])),
+        ]),
+      ),
+    );
+  }
 }
 
 /// Shared mobile, Windows and Android TV-friendly searchable selection view.

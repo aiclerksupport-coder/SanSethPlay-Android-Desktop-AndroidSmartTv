@@ -1,0 +1,24 @@
+{
+  "original_base": "SanSeth-Play-v0.1.3+4-SEARCH-FOCUS-CHANNEL-RECOVERY-REPLACEMENT-SOURCE.zip",
+  "release_version": "0.1.4+5",
+  "changed_files": [
+    "BUILD_TEST_INSTALL_GITHUB.ps1",
+    "BUILD_WINDOWS_INSTALLER.ps1",
+    "lib/app/home_screen.dart",
+    "lib/app/sanseth_app.dart",
+    "lib/app/tv_guide_dialog.dart",
+    "pubspec.yaml",
+    "scripts/RUN_PIPELINE.ps1"
+  ],
+  "added_files": [
+    "docs/PREMIUM_UI_V0145.md",
+    "test/premium_home_dashboard_test.dart"
+  ],
+  "removed_files": [],
+  "unaltered_files": 199,
+  "validation": {
+    "bracket_scan": "balanced",
+    "flutter_analyze": "not_run_flutter_unavailable",
+    "flutter_tests": "not_run_flutter_unavailable"
+  }
+}

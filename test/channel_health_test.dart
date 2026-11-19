@@ -35,6 +35,20 @@ void main() {
     store.dispose();
   });
 
+  test('decoder exhaustion hides temporarily without deleting or persisting',
+      () {
+    var time = DateTime.utc(2026, 11, 18);
+    final store = ChannelHealthStore(now: () => time);
+    final url = Uri.parse('https://example.com/transient.m3u8');
+    store.playbackExhausted(url);
+    expect(store.status(url), ChannelHealth.temporarilyUnavailable);
+    time = time.add(const Duration(minutes: 3));
+    expect(store.status(url), ChannelHealth.unknown);
+    store.playing(url);
+    expect(store.status(url), ChannelHealth.playing);
+    store.dispose();
+  });
+
   test('network/auth uncertainty never becomes a dead channel', () {
     final store = ChannelHealthStore();
     final url = Uri.parse('https://example.com/geo-blocked.m3u8');

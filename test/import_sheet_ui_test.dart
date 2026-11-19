@@ -18,6 +18,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 1450));
     await tester.pump();
     expect(find.text('CHANNELS'), findsOneWidget);
+    await tester.tap(find.byIcon(Icons.add_circle_outline_rounded).last);
+    await tester.pump();
     expect(find.text('Import M3U URL'), findsOneWidget);
     expect(tester.testTextInput.isVisible, isFalse);
 

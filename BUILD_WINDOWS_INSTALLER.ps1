@@ -5,7 +5,7 @@ param([switch]$SkipTests, [string]$IsccPath = '')
 $ErrorActionPreference = 'Stop'
 $Root = $PSScriptRoot
 Set-Location $Root
-$version = 'v0.1.3+4'
+$version = 'v0.1.4+5'
 $failureDir = Join-Path $Root 'failure-logs'
 $buffer = New-Object 'System.Collections.Generic.List[string]'
 function Run-Stage([string]$Name, [string]$File, [string[]]$ArgsList) {
@@ -54,12 +54,12 @@ try {
 [Setup]
 AppId={{C96E1321-81E2-4CE9-A20A-E6DD50A5E117}
 AppName=SanSeth Play
-AppVersion=0.1.1
+AppVersion=0.1.4
 AppPublisher=Kalpesh Chhabhaiya
 DefaultDirName={autopf}\SanSeth Play
 DefaultGroupName=SanSeth Play
 OutputDir=$installerEscaped
-OutputBaseFilename=SanSeth-Play-v0.1.3+4-Windows-Setup
+OutputBaseFilename=SanSeth-Play-v0.1.4+5-Windows-Setup
 Compression=lzma
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -83,7 +83,7 @@ Filename: "{app}\$($exe.Name)"; Description: "Launch SanSeth Play"; Flags: nowai
   Write-Host 'Installer is NOT signed. Windows SmartScreen may warn. Code signing required for public distribution.' -ForegroundColor Yellow
 } catch {
   New-Item -ItemType Directory -Force -Path $failureDir | Out-Null
-  $failure = Join-Path $failureDir 'FAILED_windows_installer-v0.1.3+4.log'
+  $failure = Join-Path $failureDir 'FAILED_windows_installer-v0.1.4+5.log'
   @("Reason: $($_.Exception.Message)","Stack: $($_.ScriptStackTrace)",'') + $buffer |
     Set-Content -Path $failure -Encoding UTF8
   Write-Host "FAILED. Diagnostics: $failure" -ForegroundColor Red

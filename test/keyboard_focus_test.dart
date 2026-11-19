@@ -6,6 +6,26 @@ import 'package:sanseth_play/app/sanseth_app.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets('search retains keyboard focus when viewport shrinks',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const SanSethApp());
+    await tester.pump(const Duration(milliseconds: 1450));
+    await tester.tap(find.byIcon(Icons.live_tv_outlined).last);
+    await tester.pump();
+    await tester.tap(find.byType(TextField).first);
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+  });
+
   testWidgets('startup and Add Playlist dialog never auto-open keyboard',
       (tester) async {
     SharedPreferences.setMockInitialValues({});

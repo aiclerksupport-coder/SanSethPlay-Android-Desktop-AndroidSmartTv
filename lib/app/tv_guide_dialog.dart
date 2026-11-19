@@ -4,7 +4,7 @@ import '../core/epg_repository.dart';
 import '../core/epg_schedule.dart';
 import '../core/catchup.dart';
 
-const _gold = Color(0xFFF4C65B);
+const _gold = Color(0xFFF5C75C);
 
 /// Shared horizontal EPG timeline, with lazy channel rows and bounded labels.
 /// Scroll once horizontally; all channel rows keep the same time alignment.
